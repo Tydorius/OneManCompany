@@ -1,3 +1,15 @@
+# =============================================================================
+# OneManCompany — Docker Compose for persistent deployment
+# =============================================================================
+#
+# CRITICAL: OMC uses Path.cwd() to locate data (see core/config.py).
+# Since WORKDIR is /app, all persistent state lives at /app/.onemancompany/.
+# Mount a host volume there to survive container rebuilds.
+#
+# First run will trigger the onboarding wizard (onemancompany-init).
+# Subsequent runs will reuse the persisted data.
+# =============================================================================
+
 services:
   onemancompany:
     build: .
@@ -5,20 +17,44 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Map the OS state, API keys, and configurations to your NAS
-      - /path/to/your/nas/omc/config:/root/.onemancompany
-      
-      # Map the workspace where the AI actually writes code/files
-      - /path/to/your/nas/omc/workspace:/app/workspace
+      # ──────────────────────────────────────────────────────────────────────
+      # PERSISTENT STATE (required — all data lives here)
+      # Mount this to preserve everything across container rebuilds:
+      #   .env, config.yaml, company/, logs/
+      # If omitted, init wizard runs each time and data is lost on removal.
+      # ──────────────────────────────────────────────────────────────────────
+      - /nfs/dockernfs/one-man-company/config:/app/.onemancompany
+
+      # ──────────────────────────────────────────────────────────────────────
+      # OPTIONAL: Shared workspace for agent file output
+      # Agents write project files under .onemancompany/company/business/
+      # by default. Only mount this if you have tooling that reads /app/workspace.
+      # ──────────────────────────────────────────────────────────────────────
+      # - /nfs/dockernfs/one-man-company/workspace:/app/workspace
+
     environment:
-      # Tell OMC to route requests to your local llama-swap instance
-      # (Or whatever solution you're using. I use llama-swap so I can
-      # have multiple models swap in and out as needed.)
-      - OPENAI_API_BASE=http://<LLAMA_SWAP_IP>:<PORT>/v1
-      - OPENAI_API_KEY=dummy-key-for-local
-      # Set to debug if you need to trace agent behavior
-      - DEBUG=true 
+      # ──────────────────────────────────────────────────────────────────────
+      # LLM provider configuration
+      # These are fallbacks — if .onemancompany/.env exists (on the mounted
+      # volume), values there take precedence (loaded with override=False).
+      # ──────────────────────────────────────────────────────────────────────
+
+      # OpenAI-compatible endpoint (for local proxies like llama-swap)
+      # - OPENAI_API_BASE=http://<LLAMA_SWAP_IP>:<PORT>/v1
+      # - OPENAI_API_KEY=dummy-key-for-local
+
+      # Or use OpenRouter as the provider
+      # - OPENROUTER_API_KEY=sk-or-v1-your-key-here
+
+      # Debug logging (sets log level to DEBUG; requires "1", not "true")
+      # - OMC_DEBUG=1
+
+      # Server bind (optional — defaults in pyproject.toml settings)
+      # - HOST=0.0.0.0
+      # - PORT=8000
+
     restart: unless-stopped
+
     # Optional: Limit resources to ensure it doesn't spike your cluster
     deploy:
       resources:

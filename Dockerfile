@@ -17,15 +17,30 @@ COPY . /app/
 # Install UV (Python package manager required by OMC)
 RUN pip install uv
 
-# Ensure the container treats /root as the home directory 
-# (This is where OMC stores its persistent .onemancompany data)
-ENV HOME=/root
-
 # Make the start script executable
 RUN chmod +x start.sh
 
 # Expose the default OMC port
 EXPOSE 8000
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Persistent state lives at /app/.onemancompany/ because OMC uses Path.cwd()
+# (see core/config.py: DATA_ROOT = Path.cwd() / ".onemancompany").
+#
+# Mount a host volume to /app/.onemancompany to persist data across rebuilds:
+#   - /app/.onemancompany/.env             ← API keys and provider config
+#   - /app/.onemancompany/config.yaml      ← Runtime settings (sandbox, talent market)
+#   - /app/.onemancompany/company/         ← All business data
+#     ├── human_resource/employees/        ← Employee profiles, skills, manifests
+#     ├── assets/tools/                    ← Custom tool definitions
+#     ├── business/projects/               ← Project workspaces and deliverables
+#     ├── business/products/               ← Product definitions
+#     └── company_culture.yaml              ← Company culture rules
+#   - /app/.onemancompany/logs/            ← Log files (7-day rotation)
+#
+# If NOT mounted, onemancompany-init will populate the directory inside the
+# container — but ALL data will be lost on container removal.
+# ──────────────────────────────────────────────────────────────────────────────
 
 # Start the application using their native script
 CMD ["bash", "start.sh"]
