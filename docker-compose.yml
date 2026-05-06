@@ -1,0 +1,26 @@
+services:
+  onemancompany:
+    build: .
+    container_name: omc-sandbox
+    ports:
+      - "8000:8000"
+    volumes:
+      # Map the OS state, API keys, and configurations to your NAS
+      - /path/to/your/nas/omc/config:/root/.onemancompany
+      
+      # Map the workspace where the AI actually writes code/files
+      - /path/to/your/nas/omc/workspace:/app/workspace
+    environment:
+      # Tell OMC to route requests to your local llama-swap instance
+      # (Or whatever solution you're using. I use llama-swap so I can
+      # have multiple models swap in and out as needed.)
+      - OPENAI_API_BASE=http://<LLAMA_SWAP_IP>:<PORT>/v1
+      - OPENAI_API_KEY=dummy-key-for-local
+      # Set to debug if you need to trace agent behavior
+      - DEBUG=true 
+    restart: unless-stopped
+    # Optional: Limit resources to ensure it doesn't spike your cluster
+    deploy:
+      resources:
+        limits:
+          memory: 4G
