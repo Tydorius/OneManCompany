@@ -136,12 +136,7 @@ custom_tools:
   - my_custom_tool
 
 # MCP Servers — external tool services
-mcp_servers:
-  fastskills:
-    command: uvx
-    args: ["fastskills", "--skills-dir", "{skills_dir}"]
-    env:
-      SKILLSMP_API_KEY: "{SKILLSMP_API_KEY}"
+mcp_servers: {}
 ```
 
 Custom tool example (`tools/my_custom_tool.py`):
@@ -570,12 +565,7 @@ custom_tools:
   - my_custom_tool
 
 # MCP Server — 外部工具服务
-mcp_servers:
-  fastskills:
-    command: uvx
-    args: ["fastskills", "--skills-dir", "{skills_dir}"]
-    env:
-      SKILLSMP_API_KEY: "{SKILLSMP_API_KEY}"
+mcp_servers: {}
 ```
 
 自定义工具示例（`tools/my_custom_tool.py`）：

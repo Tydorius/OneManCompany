@@ -28,7 +28,7 @@ from onemancompany.core.config import (
     DATA_DIR_NAME, DOT_ENV_FILENAME, EMPLOYEES_DIR,
     ENV_KEY_ANTHROPIC, ENV_KEY_ANTHROPIC_AUTH, ENV_KEY_DEFAULT_MODEL,
     ENV_KEY_DEFAULT_PROVIDER, ENV_KEY_HOST, ENV_KEY_OPENROUTER,
-    ENV_KEY_PORT, ENV_KEY_SANDBOX_ENABLED, ENV_KEY_SKILLSMP,
+    ENV_KEY_PORT, ENV_KEY_SANDBOX_ENABLED,
     ENV_KEY_TALENT_MARKET,
     ENV_OMC_EMPLOYEE_ID, ENV_OMC_PROJECT_DIR, ENV_OMC_PROJECT_ID,
     ENV_OMC_SERVER_URL, ENV_OMC_TASK_ID, HR_DIR, MCP_CONFIG_FILENAME,
@@ -573,23 +573,6 @@ def _step_optional(console: Console) -> dict[str, str]:
         console.print("  [bright_green]▸[/bright_green] Saved")
     console.print()
 
-    # SkillMarket API Key
-    console.print(
-        "  [bold]SkillMarket API Key[/bold]\n"
-        "  [dim]Allows employees to search and install community skills from SkillMarket\n"
-        "  when they need new capabilities (web search, data analysis, coding tools, etc.).\n"
-        "  Register at[/dim] [link=https://skillsmp.com]skillsmp.com[/link]"
-    )
-    key = _inq.secret(
-        message="SkillMarket API Key (Enter to skip):",
-        style=INQ_STYLE,
-        default="",
-    ).execute()
-    if key.strip():
-        extras[ENV_KEY_SKILLSMP] = key.strip()
-        console.print("  [bright_green]▸[/bright_green] Saved")
-    console.print()
-
     # Talent Market API Key
     console.print(
         "  [bold bright_yellow]★ Recommended[/bold bright_yellow]  [bold]Talent Market API Key[/bold]\n"
@@ -700,8 +683,8 @@ def _step_execute(
         env_lines.append(f"{ENV_KEY_ANTHROPIC}={extras[ENV_KEY_ANTHROPIC]}")
         if provider != PROVIDER_ANTHROPIC:  # Don't duplicate if already written above
             env_lines.append(f"{ENV_KEY_ANTHROPIC_AUTH}={AuthMethod.API_KEY.value}")
-    if ENV_KEY_SKILLSMP in extras:
-        env_lines.append(f"{ENV_KEY_SKILLSMP}={extras[ENV_KEY_SKILLSMP]}")
+    if ENV_KEY_TALENT_MARKET in extras:
+        env_lines.append(f"{ENV_KEY_TALENT_MARKET}={extras[ENV_KEY_TALENT_MARKET]}")
 
     env_path = DATA_ROOT / DOT_ENV_FILENAME
     write_text_utf(env_path, "\n".join(env_lines) + "\n")
@@ -748,7 +731,7 @@ def _step_execute(
 
     # 6. Generate MCP configs for founding employees
     with console.status("  Generating MCP configs..."):
-        _generate_mcp_configs(extras.get(ENV_KEY_SKILLSMP, ""))
+        _generate_mcp_configs()
     console.print("  [green]\u2714[/green] MCP configs generated for founding employees")
 
     # 7. Apply agent family (hosting) assignments to founding employees
@@ -837,7 +820,7 @@ def _assign_default_avatars(console: Console) -> None:
         console.print("  [green]\u2714[/green] Founding employees already have avatars")
 
 
-def _generate_mcp_configs(skillsmp_key: str) -> None:
+def _generate_mcp_configs() -> None:
     """Generate mcp_config.json for founding employees."""
     import sys
 
@@ -869,19 +852,6 @@ def _generate_mcp_configs(skillsmp_key: str) -> None:
             servers["gmail"] = {
                 "command": python_path,
                 "args": [str(gmail_mcp)],
-            }
-
-        if skillsmp_key:
-            servers["fastskills"] = {
-                "command": "uvx",
-                "args": [
-                    "fastskills",
-                    "--skills-dir", str(emp_dir / "skills"),
-                    "--workdir", str(emp_dir / WORKSPACE_DIR_NAME),
-                ],
-                "env": {
-                    ENV_KEY_SKILLSMP: skillsmp_key,
-                },
             }
 
         config_path = emp_dir / MCP_CONFIG_FILENAME
@@ -1003,8 +973,6 @@ def run_auto(*, skip_confirm: bool = False) -> None:
     extras: dict[str, str] = {}
     if env.get(ENV_KEY_ANTHROPIC):
         extras[ENV_KEY_ANTHROPIC] = env[ENV_KEY_ANTHROPIC]
-    if env.get(ENV_KEY_SKILLSMP):
-        extras[ENV_KEY_SKILLSMP] = env[ENV_KEY_SKILLSMP]
     if env.get(ENV_KEY_TALENT_MARKET):
         extras[ENV_KEY_TALENT_MARKET] = env[ENV_KEY_TALENT_MARKET]
 

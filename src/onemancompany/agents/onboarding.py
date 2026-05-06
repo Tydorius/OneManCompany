@@ -71,6 +71,15 @@ _DEFAULT_SKILL_NAMES = ["task_lifecycle"]
 # EA-only skills injected during founding team setup
 _EA_SKILL_NAMES = ["project-brainstorming"]
 
+# Curated skills from external sources (awesome-agent-skills ecosystem)
+_CURATED_SKILLS_DIR = Path(__file__).resolve().parent.parent / "curated_skills"
+_CURATED_SKILL_NAMES = [
+    "systematic-debugging",
+    "test-driven-development",
+    "code-review",
+    "context-fundamentals",
+]
+
 
 # ---------------------------------------------------------------------------
 # Nickname generation
@@ -663,6 +672,27 @@ def _inject_default_skills(skills_dir: Path, employee_id: str = "") -> None:
                                     shutil.copy2(str(f), str(dst_f))
                                 elif f.is_dir():
                                     shutil.copytree(str(f), str(dst_f))
+
+
+def _inject_curated_skills(skills_dir: Path) -> None:
+    """Copy/update curated skills into the employee's skills folder.
+
+    Curated skills are sourced from the awesome-agent-skills ecosystem
+    and live in src/onemancompany/curated_skills/. They are kept separate
+    from default_skills/ to distinguish OMC-native from external skills.
+    """
+    for name in _CURATED_SKILL_NAMES:
+        src = _CURATED_SKILLS_DIR / name
+        if not src.exists():
+            continue
+        dst = skills_dir / name
+        if not dst.exists():
+            shutil.copytree(str(src), str(dst))
+        else:
+            src_md = src / "SKILL.md"
+            dst_md = dst / "SKILL.md"
+            if src_md.exists():
+                shutil.copy2(str(src_md), str(dst_md))
 
 
 def _assign_default_avatar(emp_dir: Path, emp_num: str) -> None:

@@ -14,6 +14,9 @@ WORKDIR /app
 # Copy your forked repository into the container
 COPY . /app/
 
+# Initialize git submodules (vendor/awesome-agent-skills index for reference)
+RUN git submodule update --init --recursive || true
+
 # Install UV (Python package manager required by OMC)
 RUN pip install uv
 

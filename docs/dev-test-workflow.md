@@ -104,7 +104,6 @@ onemancompany-init --auto   # 或 npx @1mancompany/onemancompany init --auto
 | `HOST` | | 服务地址，默认 `0.0.0.0` |
 | `PORT` | | 端口，默认 `8000` |
 | `ANTHROPIC_API_KEY` | | Self-hosted 员工需要 |
-| `SKILLSMP_API_KEY` | | FastSkills MCP 集成 |
 | `TALENT_MARKET_API_KEY` | | 人才市场招聘 |
 
 自动模式会显示配置摘要并要求二次确认后才执行。

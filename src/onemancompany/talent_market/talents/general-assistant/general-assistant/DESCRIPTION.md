@@ -12,7 +12,7 @@ A versatile AI assistant with file operations and shell command capabilities. Su
 - **Shell commands** — Execute bash commands for automation
 - **Research & writing** — Analyze documents, write reports, summarize content
 - **Code analysis** — Read and understand codebases, suggest improvements
-- **FastSkills MCP** — Access to a growing library of skills via MCP
+- **Curated Skills** — Access to vetted, localized skill definitions
 
 ## Use Cases
 
@@ -24,4 +24,4 @@ A versatile AI assistant with file operations and shell command capabilities. Su
 
 - **Agent Family**: OMC Talent
 - **Hosting**: Company-hosted
-- **Tools**: Filesystem, Bash, FastSkills MCP
+- **Tools**: Filesystem, Bash, Curated Skills

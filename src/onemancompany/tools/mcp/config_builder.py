@@ -55,24 +55,6 @@ def build_mcp_config(
             "args": [str(gmail_mcp)],
         }
 
-    # FastSkills MCP — available to all employees with API key configured
-    from onemancompany.core.config import settings
-    if settings.skillsmp_api_key:
-        emp_dir = EMPLOYEES_DIR / employee_id
-        skills_dir = emp_dir / "skills"
-        workdir = emp_dir / WORKSPACE_DIR_NAME
-        servers["fastskills"] = {
-            "command": "uvx",
-            "args": [
-                "fastskills",
-                "--skills-dir", str(skills_dir),
-                "--workdir", str(workdir),
-            ],
-            "env": {
-                "SKILLSMP_API_KEY": settings.skillsmp_api_key,
-            },
-        }
-
     return {"mcpServers": servers}
 
 

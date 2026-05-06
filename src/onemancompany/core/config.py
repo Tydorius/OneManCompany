@@ -147,7 +147,6 @@ ENV_OMC_SERVER_URL = "OMC_SERVER_URL"
 
 # .env variable names (used in onboarding and settings)
 ENV_KEY_ANTHROPIC = "ANTHROPIC_API_KEY"
-ENV_KEY_SKILLSMP = "SKILLSMP_API_KEY"
 ENV_KEY_TALENT_MARKET = "TALENT_MARKET_API_KEY"
 ENV_KEY_OPENROUTER = "OPENROUTER_API_KEY"
 ENV_KEY_DEFAULT_PROVIDER = "DEFAULT_API_PROVIDER"
@@ -580,9 +579,6 @@ class Settings(BaseSettings):
     default_api_base_url: str = ""  # Custom base URL override for the default provider
     custom_chat_class: str = "openai"  # "openai" | "anthropic" — API format for custom provider
     default_llm_model: str = "google/gemini-3.1-flash-lite-preview"
-
-    # FastSkills MCP
-    skillsmp_api_key: str = ""
 
     # Server
     host: str = "0.0.0.0"
