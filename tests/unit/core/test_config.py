@@ -642,11 +642,18 @@ class TestManifest:
 # ---------------------------------------------------------------------------
 
 class TestListAvailableTalents:
+    def _patch_search_dirs(self, monkeypatch, tmp_path):
+        """Patch all three talent search dirs to tmp_path subdirs."""
+        import onemancompany.core.config as config_mod
+        monkeypatch.setattr(config_mod, "USER_TALENTS_DIR", tmp_path / "user")
+        monkeypatch.setattr(config_mod, "TALENTS_RUNTIME_DIR", tmp_path / "runtime")
+        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path / "builtin")
+
     def test_talents_dir_not_exists(self, tmp_path, monkeypatch):
-        """TALENTS_DIR doesn't exist => returns []."""
+        """All search dirs don't exist => returns []."""
         import onemancompany.core.config as config_mod
 
-        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path / "nonexistent")
+        self._patch_search_dirs(monkeypatch, tmp_path)
         result = config_mod.list_available_talents()
         assert result == []
 
@@ -654,11 +661,12 @@ class TestListAvailableTalents:
         """Talent dirs with profile.yaml are listed."""
         import onemancompany.core.config as config_mod
 
-        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path)
+        builtin = tmp_path / "builtin"
+        self._patch_search_dirs(monkeypatch, tmp_path)
 
         # Valid talent with all fields
-        t1 = tmp_path / "talent_a"
-        t1.mkdir()
+        t1 = builtin / "talent_a"
+        t1.mkdir(parents=True)
         yaml.dump({
             "id": "ta",
             "name": "Talent A",
@@ -669,15 +677,15 @@ class TestListAvailableTalents:
         }, open(t1 / "profile.yaml", "w"))
 
         # Valid talent with minimal fields (defaults tested)
-        t2 = tmp_path / "talent_b"
-        t2.mkdir()
+        t2 = builtin / "talent_b"
+        t2.mkdir(parents=True)
         yaml.dump({"name": "Talent B"}, open(t2 / "profile.yaml", "w"))
 
         # Non-directory file — should be skipped
-        (tmp_path / "readme.txt").write_text("not a talent")
+        (builtin / "readme.txt").write_text("not a talent")
 
         # Directory without profile.yaml — should be skipped
-        (tmp_path / "no_profile").mkdir()
+        (builtin / "no_profile").mkdir()
 
         result = config_mod.list_available_talents()
         assert len(result) == 2
@@ -700,12 +708,45 @@ class TestListAvailableTalents:
 # load_talent_profile
 # ---------------------------------------------------------------------------
 
+    def test_user_overrides_builtin(self, tmp_path, monkeypatch):
+        """User talent overrides built-in talent of same ID."""
+        import onemancompany.core.config as config_mod
+
+        self._patch_search_dirs(monkeypatch, tmp_path)
+        builtin = tmp_path / "builtin"
+        user = tmp_path / "user"
+        builtin.mkdir(parents=True)
+        user.mkdir(parents=True)
+
+        # Built-in version
+        t1 = builtin / "my-talent"
+        t1.mkdir()
+        yaml.dump({"id": "my-talent", "name": "Built-in Talent"}, open(t1 / "profile.yaml", "w"))
+
+        # User version (same ID)
+        t2 = user / "my-talent"
+        t2.mkdir()
+        yaml.dump({"id": "my-talent", "name": "User Talent"}, open(t2 / "profile.yaml", "w"))
+
+        result = config_mod.list_available_talents()
+        assert len(result) == 1
+        assert result[0]["name"] == "User Talent"
+        assert result[0]["tier"] == "user"
+
+
 class TestLoadTalentProfile:
+    def _patch_search_dirs(self, monkeypatch, tmp_path):
+        """Patch all three talent search dirs to tmp_path subdirs."""
+        import onemancompany.core.config as config_mod
+        monkeypatch.setattr(config_mod, "USER_TALENTS_DIR", tmp_path / "user")
+        monkeypatch.setattr(config_mod, "TALENTS_RUNTIME_DIR", tmp_path / "runtime")
+        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path / "builtin")
+
     def test_missing_profile(self, tmp_path, monkeypatch):
         """No profile.yaml => returns {}."""
         import onemancompany.core.config as config_mod
 
-        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path)
+        self._patch_search_dirs(monkeypatch, tmp_path)
         result = config_mod.load_talent_profile("nonexistent")
         assert result == {}
 
@@ -713,14 +754,38 @@ class TestLoadTalentProfile:
         """Valid profile.yaml => returns parsed dict."""
         import onemancompany.core.config as config_mod
 
-        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path)
-        talent_dir = tmp_path / "my_talent"
-        talent_dir.mkdir()
+        builtin = tmp_path / "builtin"
+        self._patch_search_dirs(monkeypatch, tmp_path)
+        talent_dir = builtin / "my_talent"
+        talent_dir.mkdir(parents=True)
         yaml.dump({"name": "My Talent", "role": "Designer"}, open(talent_dir / "profile.yaml", "w"))
 
         result = config_mod.load_talent_profile("my_talent")
         assert result["name"] == "My Talent"
         assert result["role"] == "Designer"
+
+    def test_user_profile_overrides_builtin(self, tmp_path, monkeypatch):
+        """User profile takes precedence over built-in."""
+        import onemancompany.core.config as config_mod
+
+        builtin = tmp_path / "builtin"
+        user = tmp_path / "user"
+        self._patch_search_dirs(monkeypatch, tmp_path)
+        builtin.mkdir(parents=True)
+        user.mkdir(parents=True)
+
+        # Built-in
+        t1 = builtin / "my-talent"
+        t1.mkdir()
+        yaml.dump({"name": "Built-in"}, open(t1 / "profile.yaml", "w"))
+
+        # User override
+        t2 = user / "my-talent"
+        t2.mkdir()
+        yaml.dump({"name": "User Override"}, open(t2 / "profile.yaml", "w"))
+
+        result = config_mod.load_talent_profile("my-talent")
+        assert result["name"] == "User Override"
 
 
 # ---------------------------------------------------------------------------
@@ -728,11 +793,18 @@ class TestLoadTalentProfile:
 # ---------------------------------------------------------------------------
 
 class TestLoadTalentTools:
+    def _patch_search_dirs(self, monkeypatch, tmp_path):
+        """Patch all three talent search dirs to tmp_path subdirs."""
+        import onemancompany.core.config as config_mod
+        monkeypatch.setattr(config_mod, "USER_TALENTS_DIR", tmp_path / "user")
+        monkeypatch.setattr(config_mod, "TALENTS_RUNTIME_DIR", tmp_path / "runtime")
+        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path / "builtin")
+
     def test_missing_manifest(self, tmp_path, monkeypatch):
         """No manifest.yaml => returns []."""
         import onemancompany.core.config as config_mod
 
-        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path)
+        self._patch_search_dirs(monkeypatch, tmp_path)
         result = config_mod.load_talent_tools("nonexistent")
         assert result == []
 
@@ -740,8 +812,9 @@ class TestLoadTalentTools:
         """Reads both builtin_tools and custom_tools from manifest."""
         import onemancompany.core.config as config_mod
 
-        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path)
-        tools_dir = tmp_path / "my_talent" / "tools"
+        builtin = tmp_path / "builtin"
+        self._patch_search_dirs(monkeypatch, tmp_path)
+        tools_dir = builtin / "my_talent" / "tools"
         tools_dir.mkdir(parents=True)
         yaml.dump({
             "builtin_tools": ["search", "calculator"],
@@ -755,8 +828,9 @@ class TestLoadTalentTools:
         """manifest.yaml with no tools keys => returns []."""
         import onemancompany.core.config as config_mod
 
-        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path)
-        tools_dir = tmp_path / "my_talent" / "tools"
+        builtin = tmp_path / "builtin"
+        self._patch_search_dirs(monkeypatch, tmp_path)
+        tools_dir = builtin / "my_talent" / "tools"
         tools_dir.mkdir(parents=True)
         yaml.dump({}, open(tools_dir / "manifest.yaml", "w"))
 
@@ -769,11 +843,18 @@ class TestLoadTalentTools:
 # ---------------------------------------------------------------------------
 
 class TestLoadTalentSkills:
+    def _patch_search_dirs(self, monkeypatch, tmp_path):
+        """Patch all three talent search dirs to tmp_path subdirs."""
+        import onemancompany.core.config as config_mod
+        monkeypatch.setattr(config_mod, "USER_TALENTS_DIR", tmp_path / "user")
+        monkeypatch.setattr(config_mod, "TALENTS_RUNTIME_DIR", tmp_path / "runtime")
+        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path / "builtin")
+
     def test_missing_skills_dir(self, tmp_path, monkeypatch):
         """No skills dir => returns []."""
         import onemancompany.core.config as config_mod
 
-        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path)
+        self._patch_search_dirs(monkeypatch, tmp_path)
         result = config_mod.load_talent_skills("nonexistent")
         assert result == []
 
@@ -781,8 +862,9 @@ class TestLoadTalentSkills:
         """Loads .md files from skills dir, ignores other files."""
         import onemancompany.core.config as config_mod
 
-        monkeypatch.setattr(config_mod, "TALENTS_DIR", tmp_path)
-        skills_dir = tmp_path / "my_talent" / "skills"
+        builtin = tmp_path / "builtin"
+        self._patch_search_dirs(monkeypatch, tmp_path)
+        skills_dir = builtin / "my_talent" / "skills"
         skills_dir.mkdir(parents=True)
         (skills_dir / "python.md").write_text("# Python\nExpert")
         (skills_dir / "go.md").write_text("# Go\nBeginner")

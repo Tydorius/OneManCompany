@@ -2050,40 +2050,110 @@ def _get_local_talent_count() -> int:
 
 @router.get("/api/talent-pool")
 async def get_talent_pool() -> dict:
-    """Return the talent pool — purchased talents (API) or local packages."""
-    from onemancompany.agents.recruitment import talent_market
-
-    if talent_market.connected:
-        try:
-            data = await talent_market.list_my_talents()
-            talents = []
-            for t in data.get("talents", []):
-                talents.append({
-                    "talent_id": t.get("talent_id", t.get("id", "")),
-                    "name": t.get("name", ""),
-                    "role": t.get("role", ""),
-                    "skills": t.get("skills", []),
-                    "status": "purchased",
-                    "purchased_at": t.get("purchased_at", ""),
-                })
-            return {"source": "api", "talents": talents}
-        except Exception as e:
-            logger.error("Failed to fetch talent pool from API: {}", e)
-            # Fall through to local
-
+    """Return the talent pool — local packages always, cloud talents when connected."""
     from onemancompany.core.config import list_available_talents, load_talent_profile
-    talents = []
+
+    # Local talents are always present
+    local_talents = []
     for t in list_available_talents():
         profile = load_talent_profile(t["id"])
         if profile:
-            talents.append({
+            local_talents.append({
                 "talent_id": profile.get("id", t["id"]),
                 "name": profile.get("name", t["id"]),
                 "role": profile.get("role", ""),
                 "skills": profile.get("skills", []),
+                "source": "local",
+                "tier": t.get("tier", "builtin"),
                 "status": "local",
             })
-    return {"source": "local", "talents": talents}
+
+    result: dict = {
+        "source": "dual",
+        "local": {"count": len(local_talents), "talents": local_talents},
+        "cloud": {"connected": False, "count": 0, "talents": []},
+    }
+
+    # Augment with cloud talents if connected
+    from onemancompany.agents.recruitment import talent_market
+    if talent_market.connected:
+        try:
+            data = await talent_market.list_my_talents()
+            cloud_talents = []
+            for t in data.get("talents", []):
+                cloud_talents.append({
+                    "talent_id": t.get("talent_id", t.get("id", "")),
+                    "name": t.get("name", ""),
+                    "role": t.get("role", ""),
+                    "skills": t.get("skills", []),
+                    "source": "cloud",
+                    "status": "purchased",
+                    "purchased_at": t.get("purchased_at", ""),
+                })
+            result["cloud"] = {
+                "connected": True,
+                "count": len(cloud_talents),
+                "talents": cloud_talents,
+            }
+        except Exception as e:
+            logger.error("Failed to fetch cloud talent pool: {}", e)
+
+    # Backward-compat flat list for older frontend code
+    all_talents = local_talents + result["cloud"]["talents"]
+    result["talents"] = all_talents
+
+    return result
+
+
+@router.post("/api/talents/import")
+async def import_talent_from_github(body: dict) -> dict:
+    """Import a GitHub repo as a talent package into the user talents directory."""
+    url = body.get("url", "").strip()
+    if not url:
+        return {"error": "url is required"}
+
+    from onemancompany.core.config import ensure_user_talents_dir
+    user_dir = ensure_user_talents_dir()
+
+    import asyncio
+    import sys
+    from pathlib import Path
+
+    scripts_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts"
+    script_path = scripts_dir / "import_github_talent.py"
+    if not script_path.exists():
+        return {"error": "import script not found"}
+
+    cmd = [
+        sys.executable, str(script_path),
+        url,
+        "--target-dir", str(user_dir),
+        "--non-interactive",
+    ]
+    if body.get("talent_id"):
+        cmd.extend(["--talent-id", body["talent_id"]])
+    if body.get("role"):
+        cmd.extend(["--role", body["role"]])
+    if body.get("hosting"):
+        cmd.extend(["--hosting", body["hosting"]])
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        if proc.returncode != 0:
+            err_msg = stderr.decode(errors="replace").strip()
+            logger.error("Talent import failed: {}", err_msg)
+            return {"error": f"Import failed: {err_msg[:200]}"}
+        return {"status": "imported", "output": stdout.decode(errors="replace").strip()}
+    except asyncio.TimeoutError:
+        return {"error": "Import timed out (120s)"}
+    except Exception as e:
+        logger.error("Talent import error: {}", e)
+        return {"error": str(e)}
 
 
 @router.get("/api/settings/api")
@@ -2148,7 +2218,7 @@ async def update_api_settings(body: dict) -> dict:
             tm["api_key"] = api_key
         if "use_ai_search" in body:
             tm["use_ai_search"] = bool(body["use_ai_search"])
-        if "mode" in body and body["mode"] in ("local", "remote"):
+        if "mode" in body and body["mode"] in ("local", "remote", "local+remote"):
             tm["mode"] = body["mode"]
         write_text_utf(APP_CONFIG_PATH, yaml.dump(config, default_flow_style=False, allow_unicode=True))
         reload_app_config()

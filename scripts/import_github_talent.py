@@ -25,6 +25,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TALENTS_DIR = PROJECT_ROOT / "src" / "onemancompany" / "talent_market" / "talents"
+USER_TALENTS_DIR = PROJECT_ROOT / ".onemancompany" / "company" / "assets" / "talents"
 
 ROLE_KEYWORDS: dict[str, list[tuple[str, int]]] = {
     "Manager": [
@@ -472,9 +473,10 @@ def infer_personality_tags(role: str, skills: list[SkillInfo]) -> list[str]:
 # Generate talent package
 # ---------------------------------------------------------------------------
 
-def generate_talent_package(config: ImportConfig, analysis: RepoAnalysis, dry_run: bool = False) -> Path:
-    """Write the talent package to TALENTS_DIR."""
-    talent_dir = TALENTS_DIR / config.talent_id
+def generate_talent_package(config: ImportConfig, analysis: RepoAnalysis, dry_run: bool = False, target_dir: Path | None = None) -> Path:
+    """Write the talent package to target_dir or TALENTS_DIR."""
+    base_dir = target_dir or TALENTS_DIR
+    talent_dir = base_dir / config.talent_id
 
     if dry_run:
         print(f"\n=== DRY RUN — would write to {talent_dir} ===\n")
@@ -620,6 +622,7 @@ def main():
     parser.add_argument("--branch", help="Git branch to clone (default: main, fallback master)")
     parser.add_argument("--non-interactive", action="store_true", help="Skip interactive prompts")
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing files")
+    parser.add_argument("--target-dir", help="Write to custom directory instead of built-in talents/")
     args = parser.parse_args()
 
     repo_name = repo_name_from_url(args.url)
@@ -658,7 +661,8 @@ def main():
                 config.hosting = args.hosting
 
         print(f"[4/4] Generating talent package...")
-        talent_dir = generate_talent_package(config, analysis, dry_run=args.dry_run)
+        target = Path(args.target_dir) if args.target_dir else None
+        talent_dir = generate_talent_package(config, analysis, dry_run=args.dry_run, target_dir=target)
 
         if not args.dry_run:
             skill_count = len(config.skills_to_import)

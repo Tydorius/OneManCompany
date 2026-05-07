@@ -232,10 +232,11 @@ _ORG_DIR_DESCRIPTIONS: dict["OrgDir", str] = {
     OrgDir.DIRECTION: "Company strategic direction (YAML)",
 }
 
-# Talent market — built-in talents (source-relative), cloned talents (runtime)
+# Talent market — built-in talents (source-relative), cloned talents (runtime), user talents
 TALENT_MARKET_DIR = Path(__file__).parent.parent / "talent_market"
 TALENTS_DIR = TALENT_MARKET_DIR / "talents"  # built-in (general-assistant, etc.)
 TALENTS_RUNTIME_DIR = DATA_ROOT / "talent_market" / "talents"  # cloned from market
+USER_TALENTS_DIR = DATA_ROOT / "company" / "assets" / "talents"  # user-created talents
 
 # ---------------------------------------------------------------------------
 # Founding member IDs (permanent employee numbers)
@@ -1006,13 +1007,24 @@ def save_custom_settings(employee_id: str, updates: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _talent_search_dirs() -> list[Path]:
+    """Return the ordered list of directories to search for talent packages.
+
+    Priority: user > runtime > built-in. User talents override built-in ones.
+    """
+    cfg = load_app_config()
+    override = cfg.get("talent_market", {}).get("user_talents_dir", "")
+    user_dir = Path(override) if override else USER_TALENTS_DIR
+    return [user_dir, TALENTS_RUNTIME_DIR, TALENTS_DIR]
+
+
 def load_talent_profile(talent_id: str) -> dict:
     """Load a talent profile from talents/{id}/profile.yaml.
 
-    Searches runtime dir (cloned talents) first, then built-in src dir.
+    Searches user dir, runtime dir, then built-in dir (highest priority first).
     Returns the parsed YAML as a dict, or empty dict if not found.
     """
-    for base in (TALENTS_RUNTIME_DIR, TALENTS_DIR):
+    for base in _talent_search_dirs():
         profile_path = base / talent_id / PROFILE_FILENAME
         if profile_path.exists():
             with open_utf(profile_path) as f:
@@ -1025,58 +1037,89 @@ def load_talent_profile(talent_id: str) -> dict:
 def load_talent_tools(talent_id: str) -> list[str]:
     """Load tool names declared in talents/{id}/tools/manifest.yaml.
 
+    Searches user dir, runtime dir, then built-in dir.
     Returns a flat list of all tool names (builtin + custom).
     """
-    manifest_path = TALENTS_DIR / talent_id / "tools" / "manifest.yaml"
-    if not manifest_path.exists():
-        return []
-    with open_utf(manifest_path) as f:
-        data = yaml.safe_load(f) or {}
-    tools: list[str] = list(data.get("builtin_tools", []))
-    tools.extend(data.get("custom_tools", []))
-    return tools
+    for base in _talent_search_dirs():
+        manifest_path = base / talent_id / "tools" / "manifest.yaml"
+        if manifest_path.exists():
+            with open_utf(manifest_path) as f:
+                data = yaml.safe_load(f) or {}
+            tools: list[str] = list(data.get("builtin_tools", []))
+            tools.extend(data.get("custom_tools", []))
+            return tools
+    return []
 
 
 def load_talent_skills(talent_id: str) -> list[str]:
     """Load skill markdown files from talents/{id}/skills/.
 
+    Searches user dir, runtime dir, then built-in dir.
     Returns a list of skill file contents (one string per .md file).
     """
-    skills_dir = TALENTS_DIR / talent_id / "skills"
-    if not skills_dir.exists():
-        return []
-    result: list[str] = []
-    for skill_file in sorted(skills_dir.iterdir()):
-        if skill_file.suffix == ".md" and skill_file.is_file():
-            result.append(skill_file.read_text(encoding=ENCODING_UTF8))
-    return result
+    for base in _talent_search_dirs():
+        skills_dir = base / talent_id / "skills"
+        if skills_dir.exists():
+            result: list[str] = []
+            for skill_file in sorted(skills_dir.iterdir()):
+                if skill_file.suffix == ".md" and skill_file.is_file():
+                    result.append(skill_file.read_text(encoding=ENCODING_UTF8))
+            if result:
+                return result
+    return []
 
 
 def list_available_talents() -> list[dict]:
-    """List all available talent packages under talents/.
+    """List all available talent packages across all talent directories.
 
-    Returns a list of dicts with basic talent info (id, name, role, remote).
+    Scans user dir, runtime dir, and built-in dir. Deduplicates by talent ID
+    (user > runtime > built-in priority). Returns a list of dicts with basic
+    talent info (id, name, role, remote, tier).
     """
-    if not TALENTS_DIR.exists():
-        return []
+    seen_ids: set[str] = set()
     result: list[dict] = []
-    for talent_dir in sorted(TALENTS_DIR.iterdir()):
-        if not talent_dir.is_dir():
+    tier_names = ["user", "runtime", "builtin"]
+    for tier_idx, base in enumerate(_talent_search_dirs()):
+        if not base.exists():
             continue
-        profile_path = talent_dir / PROFILE_FILENAME
-        if not profile_path.exists():
-            continue
-        with open_utf(profile_path) as f:
-            data = yaml.safe_load(f) or {}
-        result.append({
-            "id": data.get("id", talent_dir.name),
-            "name": data.get("name", talent_dir.name),
-            "role": data.get("role", ""),
-            "remote": data.get("remote", False),
-            "description": data.get("description", ""),
-            "api_provider": data.get("api_provider", "openrouter"),
-        })
+        for talent_dir in sorted(base.iterdir()):
+            if not talent_dir.is_dir():
+                continue
+            tid = talent_dir.name
+            if tid in seen_ids:
+                continue
+            profile_path = talent_dir / PROFILE_FILENAME
+            if not profile_path.exists():
+                continue
+            with open_utf(profile_path) as f:
+                data = yaml.safe_load(f) or {}
+            resolved_id = data.get("id", tid)
+            if resolved_id in seen_ids:
+                continue
+            seen_ids.add(resolved_id)
+            result.append({
+                "id": resolved_id,
+                "name": data.get("name", tid),
+                "role": data.get("role", ""),
+                "remote": data.get("remote", False),
+                "description": data.get("description", ""),
+                "api_provider": data.get("api_provider", "openrouter"),
+                "tier": tier_names[tier_idx],
+            })
     return result
+
+
+def ensure_user_talents_dir() -> Path:
+    """Ensure the user talents directory exists and return its path.
+
+    Called during onboarding to create the directory structure for
+    user-defined talent packages.
+    """
+    cfg = load_app_config()
+    override = cfg.get("talent_market", {}).get("user_talents_dir", "")
+    user_dir = Path(override) if override else USER_TALENTS_DIR
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
 
 
 class _LazyEmployeeConfigs(dict):

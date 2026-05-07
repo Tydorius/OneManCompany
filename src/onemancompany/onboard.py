@@ -573,12 +573,12 @@ def _step_optional(console: Console) -> dict[str, str]:
         console.print("  [bright_green]▸[/bright_green] Saved")
     console.print()
 
-    # Talent Market API Key
+    # Talent Market API Key (optional enhancement for cloud market)
     console.print(
-        "  [bold bright_yellow]★ Recommended[/bold bright_yellow]  [bold]Talent Market API Key[/bold]\n"
-        "  [dim]Lets HR hire AI employees from the marketplace.\n"
-        "  Without this, only 4 founding executives available.\n"
-        "  Register at[/dim] [link=https://one-man-company.com]one-man-company.com[/link]"
+        "  [bold bright_yellow]★ Optional Enhancement[/bold bright_yellow]  [bold]Cloud Talent Market[/bold]\n"
+        "  [dim]The local talent market provides built-in AI employees for hiring.\n"
+        "  Connect to the cloud marketplace for 100+ additional specialized agents.\n"
+        "  You can add a key later in Settings. Register at[/dim] [link=https://one-man-company.com]one-man-company.com[/link]"
     )
     key = _inq.secret(
         message="Talent Market API Key (Enter to skip):",
@@ -588,7 +588,6 @@ def _step_optional(console: Console) -> dict[str, str]:
     if key.strip():
         extras[ENV_KEY_TALENT_MARKET] = key.strip()
         console.print("  [bright_green]▸[/bright_green] Saved")
-        # AI Search Talent toggle (only when TM API key is provided)
         console.print()
         console.print(
             "  [bold]AI-Powered Talent Search[/bold]\n"
@@ -601,6 +600,8 @@ def _step_optional(console: Console) -> dict[str, str]:
             style=INQ_STYLE,
         ).execute()
         extras["USE_AI_SEARCH"] = "true" if use_ai else "false"
+    else:
+        console.print("  [dim]Skipped — you can add a key later in Settings → API[/dim]")
 
     return extras
 
@@ -702,14 +703,12 @@ def _step_execute(
         cfg = yaml.safe_load(read_text_utf(dst_config)) or {}
         # Sandbox toggle
         cfg.setdefault("tools", {}).setdefault("sandbox", {})["enabled"] = sandbox_enabled
-        # Talent Market API key + mode
+        # Talent Market API key + mode (always local+remote; cloud connected only if key present)
         tm_key = extras.get(ENV_KEY_TALENT_MARKET, "")
         tm_cfg = cfg.setdefault("talent_market", {})
+        tm_cfg["mode"] = "local+remote"  # Always combined mode
         if tm_key:
             tm_cfg["api_key"] = tm_key
-            tm_cfg["mode"] = "remote"  # API key provided → default to remote
-        else:
-            tm_cfg["mode"] = "local"   # No API key → local mode
         # AI Search toggle
         use_ai_val = extras.get("USE_AI_SEARCH", "")
         if use_ai_val:
@@ -737,6 +736,10 @@ def _step_execute(
     # 7. Apply agent family (hosting) assignments to founding employees
     if founder_families:
         _apply_founder_families(console, founder_families)
+
+    # 8. Ensure user talents directory exists
+    from onemancompany.core.config import ensure_user_talents_dir
+    ensure_user_talents_dir()
 
 
 def _apply_founder_families(console: Console, founder_families: dict[str, str]) -> None:

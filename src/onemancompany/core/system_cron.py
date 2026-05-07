@@ -336,8 +336,16 @@ async def config_reload_check() -> list | None:
 
 @system_cron("talent_market_keepalive", interval="15s", description="Talent Market MCP keepalive")
 async def talent_market_keepalive() -> list | None:
-    """Ping the Talent Market MCP server; reconnect if the session is dead."""
-    from onemancompany.agents.recruitment import talent_market, start_talent_market
+    """Ping the Talent Market MCP server; reconnect if the session is dead.
+
+    Only runs when mode includes 'remote' and the session is connected.
+    """
+    from onemancompany.agents.recruitment import talent_market
+    from onemancompany.core.config import load_app_config
+
+    tm_mode = load_app_config().get("talent_market", {}).get("mode", "local+remote")
+    if "remote" not in tm_mode:
+        return None
 
     if not talent_market.connected:
         return None

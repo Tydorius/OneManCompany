@@ -4000,7 +4000,7 @@ class AppController {
             <div class="card-front">
               <div class="card-select-indicator"></div>
               <div class="card-avatar">${emoji}</div>
-              <div class="card-name">${esc(c.name)}</div>
+              <div class="card-name">${esc(c.name)} <span class="source-badge ${c.source === 'cloud' ? 'cloud' : 'local'}" style="font-size:5px;vertical-align:middle;">${c.source === 'cloud' ? '☁️' : '💾'}</span></div>
               <div class="card-role">${esc(c.role)}</div>
               <div class="card-model" title="${esc(llmModel)}">🤖 ${esc(llmModel.split('/').pop())}</div>
               <div class="card-tags">${esc(tags)}</div>
@@ -5617,38 +5617,39 @@ class AppController {
         `;
       }
 
-      // Talent Market card (unchanged)
+      // Talent Market card (dual-source)
+      const tmLocalCount = tm.local_talent_count || 0;
+      const tmCloudConnected = tm.connected || false;
+      const tmMode = tm.mode || 'local+remote';
       html += `
         <div class="api-provider-card">
           <div class="api-card-header api-card-toggle" data-target="api-tm-body">
-            <span class="api-status-dot ${tm.connected ? 'online' : (tm.mode === 'local' ? 'online' : 'offline')}"></span>
+            <span class="api-status-dot online"></span>
             <span class="api-card-title">Talent Market</span>
-            <span class="api-card-status">${tm.connected ? '☁️ Cloud' : (tm.local_talent_count > 0 ? '💾 Local (' + tm.local_talent_count + ')' : '⚠️ Not Connected')}</span>
+            <span class="api-card-status">💾 ${tmLocalCount} Local${tmCloudConnected ? ' | ☁️ Cloud' : ''}</span>
             <span class="api-card-arrow">&#9660;</span>
           </div>
           <div id="api-tm-body" class="api-card-body collapsed">
-            <div class="tm-status-info" style="font-size:6.5px;margin-bottom:4px;color:var(--text-dim);">
-              ${tm.mode === 'remote'
-                ? (tm.connected
-                  ? '✅ Connected to Cloud Talent Market'
-                  : tm.api_key_set
-                    ? '❌ Cloud connection failed'
-                    : '⚠️ API Key not configured')
-                : '💾 Using Local Talent Market (' + (tm.local_talent_count || 0) + ' talents)'}
+            <div class="tm-status-info" style="font-size:6.5px;margin-bottom:6px;color:var(--text-dim);">
+              <div style="margin-bottom:2px;">💾 <strong>${tmLocalCount}</strong> local talents always available</div>
+              <div>${tmCloudConnected ? '☁️ Connected to Cloud Market' : tm.api_key_set ? '⚠️ Cloud connection failed — check API key' : '☁️ Cloud optional — add key below to expand'}</div>
             </div>
             <div style="margin:6px 0;display:flex;align-items:center;gap:6px;">
               <label style="font-size:6.5px;color:var(--text-dim);margin-right:2px;">Mode:</label>
-              <input type="hidden" id="api-tm-mode-val" value="${tm.mode || 'local'}" />
+              <input type="hidden" id="api-tm-mode-val" value="${tmMode}" />
               <button class="pixel-btn small" id="api-tm-mode-local"
-                onclick="document.getElementById('api-tm-mode-val').value='local';this.style.borderColor='var(--pixel-green)';this.style.color='var(--pixel-green)';document.getElementById('api-tm-mode-remote').style.borderColor='';document.getElementById('api-tm-mode-remote').style.color='';document.getElementById('api-tm-remote-opts').style.display='none'"
-                style="font-size:5.5px;padding:2px 6px;${tm.mode === 'local' ? 'border-color:var(--pixel-green);color:var(--pixel-green);' : ''}">💾 Local</button>
+                onclick="document.getElementById('api-tm-mode-val').value='local';this.style.borderColor='var(--pixel-green)';this.style.color='var(--pixel-green)';document.getElementById('api-tm-mode-remote').style.borderColor='';document.getElementById('api-tm-mode-remote').style.color='';document.getElementById('api-tm-mode-lr').style.borderColor='';document.getElementById('api-tm-mode-lr').style.color='';document.getElementById('api-tm-remote-opts').style.display='none'"
+                style="font-size:5.5px;padding:2px 6px;${tmMode === 'local' ? 'border-color:var(--pixel-green);color:var(--pixel-green);' : ''}">💾 Local</button>
+              <button class="pixel-btn small" id="api-tm-mode-lr"
+                onclick="document.getElementById('api-tm-mode-val').value='local+remote';this.style.borderColor='var(--pixel-cyan)';this.style.color='var(--pixel-cyan)';document.getElementById('api-tm-mode-local').style.borderColor='';document.getElementById('api-tm-mode-local').style.color='';document.getElementById('api-tm-mode-remote').style.borderColor='';document.getElementById('api-tm-mode-remote').style.color='';document.getElementById('api-tm-remote-opts').style.display='block'"
+                style="font-size:5.5px;padding:2px 6px;${tmMode === 'local+remote' ? 'border-color:var(--pixel-cyan);color:var(--pixel-cyan);' : ''}">💾+☁️ Both</button>
               <button class="pixel-btn small" id="api-tm-mode-remote"
-                onclick="document.getElementById('api-tm-mode-val').value='remote';this.style.borderColor='var(--pixel-cyan)';this.style.color='var(--pixel-cyan)';document.getElementById('api-tm-mode-local').style.borderColor='';document.getElementById('api-tm-mode-local').style.color='';document.getElementById('api-tm-remote-opts').style.display='block'"
-                style="font-size:5.5px;padding:2px 6px;${tm.mode === 'remote' ? 'border-color:var(--pixel-cyan);color:var(--pixel-cyan);' : ''}">☁️ Remote</button>
+                onclick="document.getElementById('api-tm-mode-val').value='remote';this.style.borderColor='var(--pixel-cyan)';this.style.color='var(--pixel-cyan)';document.getElementById('api-tm-mode-local').style.borderColor='';document.getElementById('api-tm-mode-local').style.color='';document.getElementById('api-tm-mode-lr').style.borderColor='';document.getElementById('api-tm-mode-lr').style.color='';document.getElementById('api-tm-remote-opts').style.display='block'"
+                style="font-size:5.5px;padding:2px 6px;${tmMode === 'remote' ? 'border-color:var(--pixel-cyan);color:var(--pixel-cyan);' : ''}">☁️ Remote</button>
             </div>
-            <div id="api-tm-remote-opts" style="${tm.mode === 'remote' ? '' : 'display:none;'}">
+            <div id="api-tm-remote-opts" style="${tmMode !== 'local' ? '' : 'display:none;'}">
               <label class="api-field-label">API Key</label>
-              <input type="password" id="api-tm-key" class="api-key-input" placeholder="${tm.api_key_set ? tm.api_key_preview : '(none)'}" />
+              <input type="password" id="api-tm-key" class="api-key-input" placeholder="${tm.api_key_set ? tm.api_key_preview : 'Enter key to enable Cloud Market...'}" />
               ${tm.api_key_set ? `
               <div style="margin:6px 0;display:flex;align-items:center;gap:6px;">
                 <input type="checkbox" id="api-tm-use-ai" ${tm.use_ai_search ? 'checked' : ''} style="accent-color:var(--pixel-green);" />
@@ -10166,8 +10167,13 @@ class AppController {
 
   _renderTalentPool(data) {
     const badge = document.getElementById('talent-pool-source-badge');
-    badge.textContent = data.source === 'api' ? 'API' : 'Local';
-    badge.className = 'talent-pool-badge ' + (data.source === 'api' ? 'api' : 'local');
+    const localInfo = data.local || {};
+    const cloudInfo = data.cloud || {};
+    const localCount = localInfo.count || 0;
+    const cloudCount = cloudInfo.count || 0;
+    const cloudConnected = cloudInfo.connected || false;
+    badge.innerHTML = `💾 ${localCount} Local` + (cloudConnected ? ` | ☁️ ${cloudCount} Cloud` : '');
+    badge.className = 'talent-pool-badge dual';
 
     const list = document.getElementById('talent-pool-list');
     list.innerHTML = '';
@@ -10180,13 +10186,16 @@ class AppController {
     for (const t of data.talents) {
       const card = document.createElement('div');
       card.className = 'talent-pool-card';
+      const sourceTag = t.source === 'cloud'
+        ? '<span class="source-badge cloud">☁️ Cloud</span>'
+        : `<span class="source-badge local">💾 Local</span>`;
       card.innerHTML = `
-        <div class="talent-name">${t.name || t.talent_id}</div>
+        <div class="talent-name">${t.name || t.talent_id} ${sourceTag}</div>
         <div class="talent-role">${t.role || ''}</div>
         <div class="talent-skills">
           ${(t.skills || []).map(s => `<span class="skill-tag">${s}</span>`).join('')}
         </div>
-        <div class="talent-status">${t.status === 'purchased' ? '✓ Purchased' : 'Local'}</div>
+        <div class="talent-status">${t.status === 'purchased' ? '✓ Purchased' : 'Available'}</div>
       `;
       list.appendChild(card);
     }
