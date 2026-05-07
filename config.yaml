@@ -24,3 +24,69 @@ skills_market:
   api_key: "" # Set your API key in Settings or here
   mode: "local" # "local" = curated only | "local+remote" = curated + cloud | "remote" = cloud only
   enabled: true # Master toggle — set false to fully disable marketplace
+
+cognitive_budget:
+  enabled: false                    # Master toggle for multi-model routing
+  provider: "custom"                # Provider name from PROVIDER_REGISTRY (usually "custom" for local proxy)
+  base_url: "http://127.0.0.1:8080"  # Local proxy endpoint (llama-swap, vLLM, etc.)
+  api_key: "not-needed"             # Dummy key for local proxies; real key for cloud
+  chat_class: "openai"              # "openai" (OpenAI-compatible) or "anthropic"
+
+  model_profiles:
+    architect:
+      model: "architect"
+      description: "Strategic planning, architecture review, context synthesis"
+      context_window: 256000
+      cost_tier: "high"
+      roles:
+        - "Architect"
+        - "Senior Architect"
+
+    senior-engineer:
+      model: "senior-engineer"
+      description: "Deep reasoning, system architecture, code review"
+      context_window: 128000
+      cost_tier: "medium"
+      roles:
+        - "Senior Engineer"
+        - "Software Engineer"
+        - "Security Engineer"
+
+    tool-executor:
+      model: "tool-executor"
+      description: "Fast execution, boilerplate, API calls, test writing"
+      context_window: 32000
+      cost_tier: "low"
+      roles:
+        - "Junior Developer"
+        - "QA Engineer"
+        - "Technical Writer"
+        - "DevOps Engineer"
+
+    qa-critic:
+      model: "qa-critic"
+      description: "Quality assurance, adversarial review, UX evaluation"
+      context_window: 65536
+      cost_tier: "medium"
+      roles:
+        - "UX Designer"
+
+    repo-specialist:
+      model: "repo-specialist"
+      description: "Repository refactoring, batch synthesis, data analysis"
+      context_window: 65536
+      cost_tier: "medium"
+      roles:
+        - "Data Analyst"
+        - "Research Scientist"
+        - "Product Manager"
+        - "Marketing Specialist"
+
+    general:
+      model: "senior-engineer"
+      description: "General-purpose tasks, default for unassigned roles"
+      context_window: 128000
+      cost_tier: "medium"
+      roles:
+        - "Assistant"
+        - "Engineer"

@@ -963,6 +963,30 @@ async def execute_hire(
         _settings = load_app_config()
         llm_model = _settings.get("default_llm_model", "") if isinstance(_settings, dict) else getattr(_settings, "default_llm_model", "")
 
+    # Auto-resolve model from cognitive budget if still not set
+    if not llm_model:
+        from onemancompany.core.model_router import resolve_model_for_role, resolve_model_for_profile_hint
+        # Try model_profile_hint from talent profile first
+        if talent_dir and talent_dir.exists():
+            tp = talent_dir / "profile.yaml"
+            if tp.exists():
+                import yaml as _yaml
+                talent_raw = _yaml.safe_load(tp.read_text(encoding="utf-8")) or {}
+                hint = talent_raw.get("model_profile_hint", "")
+                if hint:
+                    cb_hint = resolve_model_for_profile_hint(hint)
+                    if cb_hint:
+                        llm_model, api_provider = cb_hint
+                        logger.debug("[execute_hire] Cognitive budget (hint='{}'): role='{}' -> model='{}', provider='{}'",
+                                     hint, role, llm_model, api_provider)
+        # Fall back to role-based resolution
+        if not llm_model:
+            cb_result = resolve_model_for_role(role)
+            if cb_result:
+                llm_model, api_provider = cb_result
+                logger.debug("[execute_hire] Cognitive budget (role): role='{}' -> model='{}', provider='{}'",
+                             role, llm_model, api_provider)
+
     # Salary
     salary = compute_salary(llm_model) if llm_model else 0.0
 

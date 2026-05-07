@@ -169,6 +169,36 @@ OMC_DEBUG=1 .venv/bin/python -m onemancompany.main
 .venv/bin/python -c "from onemancompany.main import app; print('OK')"
 ```
 
+### 5.1 隔离进程运行测试（推荐用于 CLI / AI 会话）
+
+当通过 CLI 工具（Crush、Claude 等）运行测试时，长时间运行的测试套件可能导致会话超时或中断。使用 `scripts/run_tests.bat` 可以将测试包裹在独立进程中，结果写入文件，避免会话阻塞：
+
+```cmd
+REM 运行全部 unit 测试（后台执行，结果写入 .test-results\result.txt）
+scripts\run_tests.bat
+
+REM 运行指定路径
+scripts\run_tests.bat tests\unit\core\
+
+REM 带额外 pytest 参数
+scripts\run_tests.bat tests\unit\core\ -k test_config
+```
+
+**结果文件格式**（`.test-results/result.txt`）：
+
+```
+PASS                    ← 第1行：PASS 或 FAIL
+2026-05-07 17:40:21     ← 第2行：时间戳
+0                       ← 第3行：退出码
+command: pytest ...     ← 第4行：执行的命令
+=== test session ...    ← 第5行起：pytest 完整输出
+```
+
+**AI 工具调用流程**：
+1. 后台启动：`scripts\run_tests.bat <target>` （使用 `run_in_background`）
+2. 等待后检查结果：读取 `.test-results\result.txt` 第一行（`PASS`/`FAIL`/`RUNNING`）
+3. 读取完整输出查看失败详情
+
 ## 6. 完整开发周期示例
 
 ```

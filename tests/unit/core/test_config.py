@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -897,3 +897,225 @@ class TestMoveEmployeeEarlyReturns:
         monkeypatch.setattr(config_mod, "EX_EMPLOYEES_DIR", tmp_path)
         result = config_mod.move_ex_employee_back("nonexistent")
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# CognitiveBudgetConfig / ModelProfile — Pydantic validation
+# ---------------------------------------------------------------------------
+
+class TestCognitiveBudgetConfig:
+
+    def test_model_profile_defaults(self):
+        from onemancompany.core.config import ModelProfile
+        p = ModelProfile()
+        assert p.model == ""
+        assert p.description == ""
+        assert p.context_window == 128000
+        assert p.cost_tier == "medium"
+        assert p.roles == []
+
+    def test_model_profile_with_values(self):
+        from onemancompany.core.config import ModelProfile
+        p = ModelProfile(
+            model="architect",
+            description="Strategic",
+            context_window=256000,
+            cost_tier="high",
+            roles=["Architect", "Senior Architect"],
+        )
+        assert p.model == "architect"
+        assert p.context_window == 256000
+        assert len(p.roles) == 2
+
+    def test_cognitive_budget_defaults(self):
+        from onemancompany.core.config import CognitiveBudgetConfig
+        cb = CognitiveBudgetConfig()
+        assert cb.enabled is False
+        assert cb.provider == "custom"
+        assert cb.base_url == ""
+        assert cb.api_key == ""
+        assert cb.chat_class == "openai"
+        assert cb.model_profiles == {}
+
+    def test_cognitive_budget_with_profiles(self):
+        from onemancompany.core.config import CognitiveBudgetConfig, ModelProfile
+        cb = CognitiveBudgetConfig(
+            enabled=True,
+            provider="custom",
+            base_url="http://localhost:8080",
+            api_key="test-key",
+            model_profiles={
+                "architect": ModelProfile(model="arch-model", roles=["Architect"]),
+                "general": ModelProfile(model="general-model", roles=["Assistant"]),
+            },
+        )
+        assert cb.enabled is True
+        assert len(cb.model_profiles) == 2
+        assert cb.model_profiles["architect"].model == "arch-model"
+
+    def test_cognitive_budget_empty_profiles_valid(self):
+        from onemancompany.core.config import CognitiveBudgetConfig
+        cb = CognitiveBudgetConfig(enabled=True, model_profiles={})
+        assert cb.model_profiles == {}
+
+    def test_cognitive_budget_rejects_bad_type(self):
+        from onemancompany.core.config import CognitiveBudgetConfig
+        with pytest.raises(Exception):
+            CognitiveBudgetConfig(enabled="not_a_bool")
+
+
+class TestLoadCognitiveBudget:
+
+    @patch("onemancompany.core.config.load_app_config")
+    def test_valid_config_section(self, mock_load):
+        from onemancompany.core.config import CognitiveBudgetConfig, load_cognitive_budget
+        mock_load.return_value = {
+            "cognitive_budget": {
+                "enabled": True,
+                "base_url": "http://localhost:9999",
+                "model_profiles": {
+                    "general": {"model": "gemma3", "roles": ["Assistant"]},
+                },
+            }
+        }
+        cb = load_cognitive_budget()
+        assert isinstance(cb, CognitiveBudgetConfig)
+        assert cb.enabled is True
+        assert cb.base_url == "http://localhost:9999"
+        assert "general" in cb.model_profiles
+        assert cb.model_profiles["general"].model == "gemma3"
+
+    @patch("onemancompany.core.config.load_app_config")
+    def test_missing_section_returns_defaults(self, mock_load):
+        from onemancompany.core.config import load_cognitive_budget
+        mock_load.return_value = {}
+        cb = load_cognitive_budget()
+        assert cb.enabled is False
+        assert cb.model_profiles == {}
+
+    @patch("onemancompany.core.config.load_app_config")
+    def test_partial_config_uses_defaults(self, mock_load):
+        from onemancompany.core.config import load_cognitive_budget
+        mock_load.return_value = {
+            "cognitive_budget": {"enabled": True}
+        }
+        cb = load_cognitive_budget()
+        assert cb.enabled is True
+        assert cb.provider == "custom"
+        assert cb.base_url == ""
+        assert cb.model_profiles == {}
+
+
+class TestSyncCognitiveBudgetModels:
+
+    @patch("onemancompany.core.config.load_cognitive_budget")
+    def test_disabled_returns_zero(self, mock_load):
+        from onemancompany.core.config import CognitiveBudgetConfig, sync_cognitive_budget_models
+        mock_load.return_value = CognitiveBudgetConfig(enabled=False)
+        assert sync_cognitive_budget_models() == 0
+
+    @patch("onemancompany.core.config.load_cognitive_budget")
+    @patch("onemancompany.core.config.employee_configs")
+    def test_syncs_employee_without_explicit_model(self, mock_configs, mock_load, tmp_path, monkeypatch):
+        from onemancompany.core.config import (
+            CognitiveBudgetConfig, ModelProfile, sync_cognitive_budget_models,
+        )
+        import onemancompany.core.config as config_mod
+
+        mock_load.return_value = CognitiveBudgetConfig(
+            enabled=True,
+            provider="custom",
+            model_profiles={
+                "senior-engineer": ModelProfile(
+                    model="senior-model", roles=["Engineer", "Software Engineer"],
+                ),
+            },
+        )
+
+        cfg = MagicMock()
+        cfg.llm_model = ""
+        cfg.role = "Engineer"
+        mock_configs.items.return_value = [("00100", cfg)]
+
+        monkeypatch.setattr(config_mod, "EMPLOYEES_DIR", tmp_path)
+        _write_profile(tmp_path, "00100", {"name": "Test", "role": "Engineer"})
+
+        with patch("onemancompany.core.model_router.resolve_model_for_role", return_value=("senior-model", "custom")):
+            synced = sync_cognitive_budget_models()
+        assert synced == 1
+
+        data = yaml.safe_load((tmp_path / "00100" / "profile.yaml").read_text())
+        assert data["llm_model"] == "senior-model"
+        assert data["api_provider"] == "custom"
+
+    @patch("onemancompany.core.config.load_cognitive_budget")
+    @patch("onemancompany.core.config.employee_configs")
+    def test_skips_employee_with_explicit_model(self, mock_configs, mock_load):
+        from onemancompany.core.config import CognitiveBudgetConfig, sync_cognitive_budget_models
+
+        mock_load.return_value = CognitiveBudgetConfig(enabled=True)
+
+        cfg = MagicMock()
+        cfg.llm_model = "gpt-4"
+        mock_configs.items.return_value = [("00100", cfg)]
+
+        assert sync_cognitive_budget_models() == 0
+
+    @patch("onemancompany.core.config.load_cognitive_budget")
+    @patch("onemancompany.core.config.employee_configs")
+    def test_skips_when_no_role_match(self, mock_configs, mock_load, tmp_path, monkeypatch):
+        from onemancompany.core.config import (
+            CognitiveBudgetConfig, ModelProfile, sync_cognitive_budget_models,
+        )
+        import onemancompany.core.config as config_mod
+
+        mock_load.return_value = CognitiveBudgetConfig(
+            enabled=True,
+            model_profiles={
+                "architect": ModelProfile(model="arch", roles=["Architect"]),
+            },
+        )
+
+        cfg = MagicMock()
+        cfg.llm_model = ""
+        cfg.role = "Sales Manager"
+        mock_configs.items.return_value = [("00100", cfg)]
+
+        monkeypatch.setattr(config_mod, "EMPLOYEES_DIR", tmp_path)
+        _write_profile(tmp_path, "00100", {"name": "Test", "role": "Sales Manager"})
+
+        with patch("onemancompany.core.model_router.resolve_model_for_role", return_value=None):
+            synced = sync_cognitive_budget_models()
+        assert synced == 0
+
+    @patch("onemancompany.core.config.load_cognitive_budget")
+    @patch("onemancompany.core.config.employee_configs")
+    def test_no_changes_when_already_synced(self, mock_configs, mock_load, tmp_path, monkeypatch):
+        from onemancompany.core.config import (
+            CognitiveBudgetConfig, ModelProfile, sync_cognitive_budget_models,
+        )
+        import onemancompany.core.config as config_mod
+
+        mock_load.return_value = CognitiveBudgetConfig(
+            enabled=True,
+            model_profiles={
+                "senior-engineer": ModelProfile(model="senior-model", roles=["Engineer"]),
+            },
+        )
+
+        cfg = MagicMock()
+        cfg.llm_model = ""
+        cfg.role = "Engineer"
+        mock_configs.items.return_value = [("00100", cfg)]
+
+        monkeypatch.setattr(config_mod, "EMPLOYEES_DIR", tmp_path)
+        _write_profile(tmp_path, "00100", {
+            "name": "Test",
+            "role": "Engineer",
+            "llm_model": "senior-model",
+            "api_provider": "custom",
+        })
+
+        with patch("onemancompany.core.model_router.resolve_model_for_role", return_value=("senior-model", "custom")):
+            synced = sync_cognitive_budget_models()
+        assert synced == 0

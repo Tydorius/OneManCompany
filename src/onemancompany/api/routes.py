@@ -2352,6 +2352,96 @@ async def test_api_connection(body: dict) -> dict:
     return {"ok": ok, "error": error} if not ok else {"ok": True}
 
 
+# ===== Cognitive Budget (Multi-Model Routing) =====
+
+@router.get("/api/cognitive-budget")
+async def get_cognitive_budget() -> dict:
+    """Return current cognitive budget config with resolved employee assignments."""
+    from onemancompany.core.config import (
+        load_cognitive_budget, load_app_config, employee_configs,
+    )
+    from onemancompany.core.model_router import resolve_model_for_role
+
+    cb = load_cognitive_budget()
+
+    api_key = cb.api_key
+    result: dict = {
+        "enabled": cb.enabled,
+        "provider": cb.provider,
+        "base_url": cb.base_url,
+        "api_key_set": bool(api_key),
+        "api_key_preview": ("..." + api_key[-4:]) if len(api_key) >= 4 else "",
+        "chat_class": cb.chat_class,
+        "model_profiles": {},
+        "unassigned_roles": [],
+    }
+
+    assigned_roles: set[str] = set()
+    for profile_name, profile in cb.model_profiles.items():
+        assigned_roles.update(profile.roles)
+        # Find employees assigned to this profile
+        assigned_employees = []
+        for emp_id, cfg in employee_configs.items():
+            if cfg.role in profile.roles and not cfg.llm_model:
+                assigned_employees.append({"id": emp_id, "name": cfg.name, "role": cfg.role})
+        result["model_profiles"][profile_name] = {
+            "model": profile.model,
+            "description": profile.description,
+            "context_window": profile.context_window,
+            "cost_tier": profile.cost_tier,
+            "roles": profile.roles,
+            "assigned_employees": assigned_employees,
+        }
+
+    # Find roles with no profile mapping
+    seen_roles: set[str] = set()
+    for cfg in employee_configs.values():
+        if cfg.role not in assigned_roles and cfg.role not in seen_roles:
+            seen_roles.add(cfg.role)
+            result["unassigned_roles"].append(cfg.role)
+
+    return result
+
+
+@router.put("/api/cognitive-budget")
+async def update_cognitive_budget(body: dict) -> dict:
+    """Update cognitive budget configuration in config.yaml."""
+    import yaml
+    from onemancompany.core.config import (
+        APP_CONFIG_PATH, load_app_config, reload_app_config, write_text_utf,
+    )
+
+    config = load_app_config()
+    cb = config.setdefault("cognitive_budget", {})
+
+    if "enabled" in body:
+        cb["enabled"] = bool(body["enabled"])
+    if "base_url" in body:
+        cb["base_url"] = str(body["base_url"])
+    if "api_key" in body:
+        cb["api_key"] = str(body["api_key"])
+    if "chat_class" in body:
+        cb["chat_class"] = str(body["chat_class"])
+    if "provider" in body:
+        cb["provider"] = str(body["provider"])
+    if "model_profiles" in body:
+        cb["model_profiles"] = body["model_profiles"]
+
+    write_text_utf(APP_CONFIG_PATH, yaml.dump(config, default_flow_style=False, allow_unicode=True))
+    reload_app_config()
+
+    return {"status": "updated"}
+
+
+@router.post("/api/cognitive-budget/sync")
+async def sync_cognitive_budget() -> dict:
+    """Sync existing employees' model assignments from cognitive budget config."""
+    from onemancompany.core.config import sync_cognitive_budget_models
+
+    synced = sync_cognitive_budget_models()
+    return {"status": "synced", "synced_count": synced}
+
+
 @router.post("/api/settings/api/oauth/start")
 async def company_oauth_start() -> dict:
     """Start company-level Anthropic OAuth PKCE flow.

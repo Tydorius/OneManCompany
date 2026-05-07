@@ -8,6 +8,7 @@ llm_model: ''
 temperature: 0.7
 hosting: company
 auth_method: api_key
+model_profile_hint: general
 hiring_fee: 0.5
 salary_per_1m_tokens: 0.0
 skills:

@@ -501,6 +501,31 @@ PROVIDER_REGISTRY: dict[str, ProviderConfig] = {
 }
 
 
+class ModelProfile(BaseModel):
+    """A named model configuration within the cognitive budget."""
+    model: str = ""
+    description: str = ""
+    context_window: int = 128000
+    cost_tier: str = "medium"
+    roles: list[str] = []
+
+
+class CognitiveBudgetConfig(BaseModel):
+    """Full cognitive budget configuration for multi-model routing."""
+    enabled: bool = False
+    provider: str = "custom"
+    base_url: str = ""
+    api_key: str = ""
+    chat_class: str = "openai"
+    model_profiles: dict[str, ModelProfile] = {}
+
+
+def load_cognitive_budget() -> CognitiveBudgetConfig:
+    """Load cognitive budget config from config.yaml."""
+    raw = load_app_config().get("cognitive_budget", {})
+    return CognitiveBudgetConfig(**raw)
+
+
 def get_provider(name: str) -> ProviderConfig | None:
     """Look up a provider by name (case-insensitive)."""
     return PROVIDER_REGISTRY.get(name.lower())
@@ -536,6 +561,7 @@ class EmployeeConfig(BaseModel):
     hosting: str = "company"  # "company" | "self" | "openclaw" — also serves as agent family selector
     auth_method: str = "api_key"  # "api_key" | "oauth" (OAuth PKCE for Anthropic)
     oauth_refresh_token: str = ""  # OAuth refresh token (long-lived)
+    model_profile_hint: str = ""  # Suggested cognitive budget profile name
 
     # Fields where empty string should be treated as missing (use field default)
     _NON_EMPTY_FIELDS: ClassVar[frozenset] = frozenset({"api_provider", "hosting", "auth_method"})
@@ -653,6 +679,46 @@ def sync_founding_defaults(provider: str, model: str) -> int:
             write_text_utf(profile_path, yaml.dump(data, default_flow_style=False, allow_unicode=True))
             synced += 1
             logger.debug("sync_founding_defaults: updated {} → provider={}, model={}", fid, provider, model)
+    return synced
+
+
+def sync_cognitive_budget_models() -> int:
+    """Sync employees' model assignments from cognitive budget config.
+
+    Only updates employees whose llm_model is empty (using defaults).
+    Employees with explicit model overrides are left unchanged.
+
+    Returns the number of profiles updated.
+    """
+    from onemancompany.core.model_router import resolve_model_for_role
+
+    cb = load_cognitive_budget()
+    if not cb.enabled:
+        return 0
+
+    synced = 0
+    for emp_id, cfg in employee_configs.items():
+        if cfg.llm_model:
+            continue
+        result = resolve_model_for_role(cfg.role)
+        if not result:
+            continue
+        new_model, new_provider = result
+        profile_path = EMPLOYEES_DIR / emp_id / "profile.yaml"
+        if not profile_path.exists():
+            continue
+        data = yaml.safe_load(read_text_utf(profile_path)) or {}
+        changed = False
+        if data.get("llm_model") != new_model:
+            data["llm_model"] = new_model
+            changed = True
+        if data.get("api_provider") != new_provider:
+            data["api_provider"] = new_provider
+            changed = True
+        if changed:
+            write_text_utf(profile_path, yaml.dump(data, default_flow_style=False, allow_unicode=True))
+            synced += 1
+            logger.debug("sync_cognitive_budget_models: {} → model={}, provider={}", emp_id, new_model, new_provider)
     return synced
 
 

@@ -11,6 +11,7 @@ llm_model: ''
 temperature: 0.4
 hosting: company
 auth_method: api_key
+model_profile_hint: repo-specialist
 hiring_fee: 0.0
 salary_per_1m_tokens: 0.0
 skills:

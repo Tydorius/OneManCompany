@@ -5541,12 +5541,14 @@ class AppController {
     const container = document.getElementById('api-settings-content');
     container.innerHTML = '<div style="color:var(--text-dim);font-size:7px;padding:6px;">Loading...</div>';
     try {
-      const [settingsResp, groupsResp] = await Promise.all([
+      const [settingsResp, groupsResp, cbResp] = await Promise.all([
         fetch('/api/settings/api'),
         fetch('/api/auth/providers'),
+        fetch('/api/cognitive-budget'),
       ]);
       const settings = await settingsResp.json();
       const groups = await groupsResp.json();
+      const cb = await cbResp.json();
       const tm = settings.talent_market || {};
       const sm = settings.skills_market || {};
 
@@ -5710,6 +5712,58 @@ class AppController {
         </div>
       `;
 
+      // Cognitive Budget card
+      const cbEnabled = cb.enabled || false;
+      const cbProfiles = cb.model_profiles || {};
+      const cbProfileCount = Object.keys(cbProfiles).length;
+      const cbBaseUrl = cb.base_url || '';
+      const cbKeySet = cb.api_key_set || false;
+      const cbKeyPreview = cb.api_key_preview || '';
+      html += `
+        <div class="api-provider-card">
+          <div class="api-card-header api-card-toggle" data-target="api-cb-body">
+            <span class="api-status-dot ${cbEnabled ? 'online' : ''}"></span>
+            <span class="api-card-title">Cognitive Budget</span>
+            <span class="api-card-status">${cbEnabled ? '&#x2699; Active (' + cbProfileCount + ' profiles)' : '&#x2699; Disabled'}</span>
+            <span class="api-card-arrow">&#9660;</span>
+          </div>
+          <div id="api-cb-body" class="api-card-body collapsed">
+            <div class="tm-status-info" style="font-size:6.5px;margin-bottom:6px;color:var(--text-dim);">
+              <div style="margin-bottom:2px;">Route employees to role-specific models via a local proxy (llama-swap, vLLM, etc.)</div>
+              <div>${cbEnabled ? 'Proxy: <strong>' + this._escAttr(cbBaseUrl) + '</strong>' : 'Enable to configure multi-model routing'}</div>
+            </div>
+            <div style="margin-bottom:6px;">
+              <label style="font-size:6.5px;display:flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="api-cb-enabled" ${cbEnabled ? 'checked' : ''} style="accent-color:var(--pixel-green);" />
+                Enable Cognitive Budget
+              </label>
+            </div>
+            <div id="api-cb-config" style="${cbEnabled ? '' : 'display:none;'}">
+              <label class="api-field-label">Proxy URL</label>
+              <input type="text" id="api-cb-base-url" class="api-key-input" value="${this._escAttr(cbBaseUrl)}" placeholder="http://127.0.0.1:8080" />
+              <label class="api-field-label" style="margin-top:4px;">API Key</label>
+              <input type="password" id="api-cb-api-key" class="api-key-input" placeholder="${cbKeySet ? cbKeyPreview : 'not-needed (local proxy)'}" />
+              <div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px;">
+                <div style="font-size:6.5px;color:var(--text-dim);margin-bottom:4px;">Model Profiles</div>
+                ${Object.entries(cbProfiles).map(([name, p]) => `
+                  <div style="background:var(--bg-dark);border:1px solid var(--border);padding:4px 6px;margin-bottom:4px;border-radius:2px;">
+                    <div style="font-size:7px;color:var(--pixel-green);font-weight:bold;">${this._escAttr(name)}</div>
+                    <div style="font-size:6px;color:var(--text-dim);">${this._escAttr(p.description)}</div>
+                    <div style="font-size:5.5px;color:var(--text-dim);margin-top:2px;">model: <span style="color:var(--pixel-yellow);">${this._escAttr(p.model)}</span> | ctx: ${p.context_window ? (p.context_window / 1000) + 'K' : '?'} | tier: ${this._escAttr(p.cost_tier)}</div>
+                    ${p.roles && p.roles.length ? '<div style="font-size:5.5px;color:var(--text-dim);">roles: ' + p.roles.map(r => this._escAttr(r)).join(', ') + '</div>' : ''}
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+            <div class="api-card-actions">
+              <button class="pixel-btn small" onclick="app._saveCognitiveBudget()">Save</button>
+              ${cbEnabled ? '<button class="pixel-btn small" onclick="app._syncCognitiveBudget()">Sync Employees</button>' : ''}
+              <span id="api-cb-result" class="api-test-result"></span>
+            </div>
+          </div>
+        </div>
+      `;
+
       container.innerHTML = html;
       // Bind toggle for provider cards + lazy-load models on expand
       container.querySelectorAll('.api-card-toggle').forEach(hdr => {
@@ -5727,6 +5781,14 @@ class AppController {
           }
         });
       });
+      // Cognitive Budget enabled toggle
+      const cbEnabledCheckbox = document.getElementById('api-cb-enabled');
+      const cbConfig = document.getElementById('api-cb-config');
+      if (cbEnabledCheckbox && cbConfig) {
+        cbEnabledCheckbox.addEventListener('change', () => {
+          cbConfig.style.display = cbEnabledCheckbox.checked ? '' : 'none';
+        });
+      }
     } catch (e) {
       container.innerHTML = `<div style="color:var(--pixel-red);font-size:7px;padding:6px;">Error: ${e.message}</div>`;
     }
@@ -5775,6 +5837,53 @@ class AppController {
       } catch (e) {
         console.error('Save API settings error:', e);
       }
+    }
+  }
+
+  async _saveCognitiveBudget() {
+    const resultEl = document.getElementById('api-cb-result');
+    const enabledCheckbox = document.getElementById('api-cb-enabled');
+    const baseUrlInput = document.getElementById('api-cb-base-url');
+    const apiKeyInput = document.getElementById('api-cb-api-key');
+    const body = {
+      enabled: enabledCheckbox ? enabledCheckbox.checked : false,
+      base_url: baseUrlInput ? baseUrlInput.value.trim() : '',
+    };
+    if (apiKeyInput && apiKeyInput.value.trim()) {
+      body.api_key = apiKeyInput.value.trim();
+    }
+    try {
+      const resp = await fetch('/api/cognitive-budget', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (data.status === 'updated') {
+        if (resultEl) { resultEl.textContent = 'Saved'; resultEl.className = 'api-test-result success'; }
+        this._settingsLoaded = false;
+        this._renderApiSettings();
+      } else {
+        if (resultEl) { resultEl.textContent = data.error || 'Error'; resultEl.className = 'api-test-result fail'; }
+      }
+    } catch (e) {
+      if (resultEl) { resultEl.textContent = 'Error'; resultEl.className = 'api-test-result fail'; }
+    }
+  }
+
+  async _syncCognitiveBudget() {
+    const resultEl = document.getElementById('api-cb-result');
+    if (resultEl) { resultEl.textContent = 'Syncing...'; resultEl.className = 'api-test-result'; }
+    try {
+      const resp = await fetch('/api/cognitive-budget/sync', { method: 'POST' });
+      const data = await resp.json();
+      if (data.status === 'synced') {
+        if (resultEl) { resultEl.textContent = 'Synced ' + data.synced_count + ' employees'; resultEl.className = 'api-test-result success'; }
+      } else {
+        if (resultEl) { resultEl.textContent = data.error || 'Error'; resultEl.className = 'api-test-result fail'; }
+      }
+    } catch (e) {
+      if (resultEl) { resultEl.textContent = 'Error'; resultEl.className = 'api-test-result fail'; }
     }
   }
 

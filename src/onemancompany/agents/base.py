@@ -171,6 +171,26 @@ def make_llm(employee_id: str = "", temperature: float | None = None) -> BaseCha
     if temperature is not None:
         effective_temp = temperature
 
+    # --- Cognitive budget resolution ---
+    # If employee has no explicit model, try cognitive budget mapping
+    cb_base_url = ""
+    cb_api_key = ""
+    if employee_id and employee_id in employee_configs:
+        cfg = employee_configs[employee_id]
+        if not cfg.llm_model:
+            from onemancompany.core.model_router import resolve_model_for_employee
+            cb_result = resolve_model_for_employee(employee_id)
+            if cb_result:
+                cb_model, cb_provider = cb_result
+                model = cb_model
+                api_provider = cb_provider
+                from onemancompany.core.config import load_cognitive_budget
+                cb_config = load_cognitive_budget()
+                cb_base_url = cb_config.base_url
+                cb_api_key = cb_config.api_key
+                logger.debug("make_llm: cognitive budget for {} -> model={}, provider={}",
+                             employee_id, model, api_provider)
+
     prov = get_provider(api_provider)
 
     # For custom provider, override chat_class from runtime settings
@@ -198,8 +218,8 @@ def make_llm(employee_id: str = "", temperature: float | None = None) -> BaseCha
             extra_headers = {}
             if auth_method == AuthMethod.OAUTH or effective_key.startswith("sk-ant-oat"):
                 extra_headers["anthropic-beta"] = "oauth-2025-04-20"
-            base_url = None
-            if api_provider == "custom" and settings.default_api_base_url:
+            base_url = cb_base_url or None
+            if not base_url and api_provider == "custom" and settings.default_api_base_url:
                 base_url = settings.default_api_base_url
             return ChatAnthropic(
                 model=model,
@@ -213,14 +233,19 @@ def make_llm(employee_id: str = "", temperature: float | None = None) -> BaseCha
 
     # --- OpenAI-compatible providers (openrouter, openai, kimi, deepseek, etc.) ---
     if prov and effective_chat_class == CHAT_CLASS_OPENAI:
-        effective_key = _resolve_provider_key(api_provider, api_key)
-        if effective_key:
+        # Cognitive budget: use proxy base_url and api_key when available
+        if cb_base_url:
+            base_url = cb_base_url
+            effective_key = cb_api_key or _resolve_provider_key(api_provider, api_key)
+        else:
+            effective_key = _resolve_provider_key(api_provider, api_key)
             base_url = prov.base_url
             # Allow custom base_url override: provider-specific or global
             if api_provider == "openrouter":
                 base_url = settings.openrouter_base_url
             elif api_provider == "custom" or (settings.default_api_base_url and api_provider == settings.default_api_provider):
                 base_url = settings.default_api_base_url
+        if effective_key:
             extra_body = None
             if (api_provider or "").lower() == "deepseek":
                 # DeepSeek V4 thinking mode currently requires reasoning_content

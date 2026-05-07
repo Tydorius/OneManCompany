@@ -10,6 +10,7 @@ role: Engineer
 remote: false
 hosting: company
 auth_method: api_key
+model_profile_hint: general
 api_provider: openrouter
 llm_model: ''
 temperature: 0.7
