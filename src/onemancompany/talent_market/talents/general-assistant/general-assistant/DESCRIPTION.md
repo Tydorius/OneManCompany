@@ -13,6 +13,7 @@ A versatile AI assistant with file operations and shell command capabilities. Su
 - **Research & writing** — Analyze documents, write reports, summarize content
 - **Code analysis** — Read and understand codebases, suggest improvements
 - **Curated Skills** — Access to vetted, localized skill definitions
+- **Community Skills** — Access to SkillsMP marketplace for 100+ additional skills (when connected)
 
 ## Use Cases
 
@@ -24,4 +25,4 @@ A versatile AI assistant with file operations and shell command capabilities. Su
 
 - **Agent Family**: OMC Talent
 - **Hosting**: Company-hosted
-- **Tools**: Filesystem, Bash, Curated Skills
+- **Tools**: Filesystem, Bash, Curated Skills, Community Skills (optional)

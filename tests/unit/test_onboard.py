@@ -224,9 +224,9 @@ class TestAiSearchPrompt:
 
         mock_console = MagicMock()
 
-        # Mock inquirer: Anthropic=skip, SkillMarket=skip, TM=key, AI search=True
+        # Mock inquirer: Anthropic=skip, TM=key, SkillsMarket=skip, AI search=True
         mock_secret = MagicMock()
-        mock_secret.execute = MagicMock(side_effect=["", "", "tm-key-123"])
+        mock_secret.execute = MagicMock(side_effect=["", "tm-key-123", ""])
         mock_confirm = MagicMock()
         mock_confirm.execute = MagicMock(return_value=True)
 
@@ -263,7 +263,7 @@ class TestAiSearchPrompt:
         mock_console = MagicMock()
 
         mock_secret = MagicMock()
-        mock_secret.execute = MagicMock(side_effect=["", "", "tm-key-456"])
+        mock_secret.execute = MagicMock(side_effect=["", "tm-key-456", ""])
         mock_confirm = MagicMock()
         mock_confirm.execute = MagicMock(return_value=False)
 

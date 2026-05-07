@@ -29,10 +29,11 @@ The wizard guides you through:
 1. **OpenRouter API Key** — Required. Powers your AI employees via LLM. Get one at [openrouter.ai](https://openrouter.ai)
 2. **Default Model** — Browse and select from available models. Each employee can later be assigned a different model.
 3. **Server Configuration** — Host and port (defaults: `0.0.0.0:8000`)
-4. **Optional Keys** — Anthropic API key, SkillMarket API key, Talent Market API key. Press Enter to skip any you don't have.
+4. **Optional Keys** — Anthropic API key, Talent Market API key, SkillsMarket API key. Press Enter to skip any you don't have.
 
-!!! tip "Talent Market Recommended"
+!!! tip "Skills & Talent Markets"
     Register at [one-man-company.com](https://one-man-company.com) to get a Talent Market API key. This lets you hire community-verified AI employees.
+    Get a SkillsMarket API key at [skillsmp.com](https://skillsmp.com) to access 100+ community skills (curated skills are always available locally).
 
 ## Your First Session
 

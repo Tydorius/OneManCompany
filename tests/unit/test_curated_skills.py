@@ -1,9 +1,9 @@
-"""Tests for curated skill system — frontmatter validation, injection, and SkillMarket removal."""
+"""Tests for curated skill system — frontmatter validation, injection, and SkillsMP toggle."""
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -151,23 +151,82 @@ class TestCuratedSkillConstants:
             assert (skill_dir / "SKILL.md").is_file(), f"SKILL.md missing in {skill_dir}"
 
 
-class TestSkillMarketRemoval:
-    """Verify no SkillMarket/fastskills references remain in source code."""
+class TestSkillsMarketToggle:
+    """Verify SkillsMP marketplace is toggle-gated by config mode and API key."""
 
-    def test_no_skillsmp_in_src(self):
-        hits = []
-        for f in _SRC_DIR.rglob("*.py"):
-            content = f.read_text(encoding="utf-8", errors="ignore")
-            for pattern in ("skillsmp", "fastskills", "FastSkills", "SKILLSMP"):
-                if pattern.lower() in content.lower():
-                    hits.append((str(f), pattern))
-        assert hits == [], f"Found SkillMarket references: {hits}"
+    def test_no_fastskills_in_local_mode(self):
+        from onemancompany.tools.mcp.config_builder import build_mcp_config
 
-    def test_no_skillsmp_api_key_in_settings(self):
+        with patch("onemancompany.tools.mcp.config_builder.load_app_config",
+                   return_value={"skills_market": {"enabled": True, "mode": "local"}}), \
+             patch("onemancompany.tools.mcp.config_builder.settings"):
+            config = build_mcp_config("00100")
+        assert "fastskills" not in config["mcpServers"]
+
+    def test_fastskills_spawned_in_remote_mode_with_key(self):
+        from onemancompany.tools.mcp.config_builder import build_mcp_config
+
+        mock_settings = MagicMock()
+        mock_settings.skillsmp_api_key = ""
+        with patch("onemancompany.tools.mcp.config_builder.load_app_config",
+                   return_value={"skills_market": {"enabled": True, "mode": "remote", "api_key": "sk-test-123"}}), \
+             patch("onemancompany.tools.mcp.config_builder.settings", mock_settings), \
+             patch("onemancompany.tools.mcp.config_builder.EMPLOYEES_DIR", Path("/tmp/employees")):
+            config = build_mcp_config("00100")
+        assert "fastskills" in config["mcpServers"]
+        assert config["mcpServers"]["fastskills"]["env"]["SKILLSMP_API_KEY"] == "sk-test-123"
+
+    def test_no_fastskills_without_api_key(self):
+        from onemancompany.tools.mcp.config_builder import build_mcp_config
+
+        mock_settings = MagicMock()
+        mock_settings.skillsmp_api_key = ""
+        with patch("onemancompany.tools.mcp.config_builder.load_app_config",
+                   return_value={"skills_market": {"enabled": True, "mode": "remote"}}), \
+             patch("onemancompany.tools.mcp.config_builder.settings", mock_settings):
+            config = build_mcp_config("00100")
+        assert "fastskills" not in config["mcpServers"]
+
+    def test_disabled_flag_overrides_mode(self):
+        from onemancompany.tools.mcp.config_builder import build_mcp_config
+
+        with patch("onemancompany.tools.mcp.config_builder.load_app_config",
+                   return_value={"skills_market": {"enabled": False, "mode": "remote", "api_key": "sk-test"}}), \
+             patch("onemancompany.tools.mcp.config_builder.settings"):
+            config = build_mcp_config("00100")
+        assert "fastskills" not in config["mcpServers"]
+
+    def test_local_remote_mode_with_key_spawns_fastskills(self):
+        from onemancompany.tools.mcp.config_builder import build_mcp_config
+
+        mock_settings = MagicMock()
+        mock_settings.skillsmp_api_key = ""
+        with patch("onemancompany.tools.mcp.config_builder.load_app_config",
+                   return_value={"skills_market": {"enabled": True, "mode": "local+remote", "api_key": "sk-lr"}}), \
+             patch("onemancompany.tools.mcp.config_builder.settings", mock_settings), \
+             patch("onemancompany.tools.mcp.config_builder.EMPLOYEES_DIR", Path("/tmp/employees")):
+            config = build_mcp_config("00100")
+        assert "fastskills" in config["mcpServers"]
+
+    def test_api_key_falls_back_to_settings(self):
+        from onemancompany.tools.mcp.config_builder import build_mcp_config
+
+        mock_settings = MagicMock()
+        mock_settings.skillsmp_api_key = "sk-from-settings"
+        with patch("onemancompany.tools.mcp.config_builder.load_app_config",
+                   return_value={"skills_market": {"enabled": True, "mode": "remote"}}), \
+             patch("onemancompany.tools.mcp.config_builder.settings", mock_settings), \
+             patch("onemancompany.tools.mcp.config_builder.EMPLOYEES_DIR", Path("/tmp/employees")):
+            config = build_mcp_config("00100")
+        assert "fastskills" in config["mcpServers"]
+        assert config["mcpServers"]["fastskills"]["env"]["SKILLSMP_API_KEY"] == "sk-from-settings"
+
+    def test_skillsmp_api_key_in_settings(self):
         from onemancompany.core.config import Settings
         field_names = {f for f in Settings.model_fields}
-        assert "skillsmp_api_key" not in field_names, "SKILLSMP_API_KEY still in Settings"
+        assert "skillsmp_api_key" in field_names, "skillsmp_api_key missing from Settings"
 
-    def test_no_skillsmp_env_constant(self):
+    def test_env_key_constant_exists(self):
         import onemancompany.core.config as cfg_mod
-        assert not hasattr(cfg_mod, "ENV_KEY_SKILLSMP"), "ENV_KEY_SKILLSMP constant still exists"
+        assert hasattr(cfg_mod, "ENV_KEY_SKILLSMP"), "ENV_KEY_SKILLSMP constant missing"
+        assert cfg_mod.ENV_KEY_SKILLSMP == "SKILLSMP_API_KEY"

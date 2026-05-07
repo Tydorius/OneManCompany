@@ -12,10 +12,10 @@ import sys
 from pathlib import Path
 
 from onemancompany.core.config import (
-    EMPLOYEES_DIR, ENV_OMC_EMPLOYEE_ID, ENV_OMC_PROJECT_DIR,
+    EMPLOYEES_DIR, ENV_KEY_SKILLSMP, ENV_OMC_EMPLOYEE_ID, ENV_OMC_PROJECT_DIR,
     ENV_OMC_PROJECT_ID, ENV_OMC_SERVER_URL, ENV_OMC_TASK_ID,
     MCP_CONFIG_FILENAME, TOOLS_DIR, WORKSPACE_DIR_NAME,
-    write_text_utf,
+    load_app_config, settings, write_text_utf,
 )
 
 
@@ -54,6 +54,28 @@ def build_mcp_config(
             "command": python_path,
             "args": [str(gmail_mcp)],
         }
+
+    # FastSkills MCP — community skills marketplace (optional)
+    sm_cfg = load_app_config().get("skills_market", {})
+    sm_enabled = sm_cfg.get("enabled", True)
+    sm_mode = sm_cfg.get("mode", "local")
+    if sm_enabled and "remote" in sm_mode:
+        api_key = sm_cfg.get("api_key", "") or settings.skillsmp_api_key
+        if api_key:
+            emp_dir = EMPLOYEES_DIR / employee_id
+            skills_dir = emp_dir / "skills"
+            workdir = emp_dir / WORKSPACE_DIR_NAME
+            servers["fastskills"] = {
+                "command": "uvx",
+                "args": [
+                    "fastskills",
+                    "--skills-dir", str(skills_dir),
+                    "--workdir", str(workdir),
+                ],
+                "env": {
+                    ENV_KEY_SKILLSMP: api_key,
+                },
+            }
 
     return {"mcpServers": servers}
 

@@ -18,3 +18,9 @@ talent_market:
   use_ai_search: false # Use AI-powered search for better candidate matching
   mode: "local+remote" # "local" = local only | "local+remote" = local + cloud | "remote" = cloud only
   user_talents_dir: "" # blank = default (.onemancompany/company/assets/talents/)
+
+skills_market:
+  url: "https://skillsmp.com/api" # SkillsMP community marketplace endpoint
+  api_key: "" # Set your API key in Settings or here
+  mode: "local" # "local" = curated only | "local+remote" = curated + cloud | "remote" = cloud only
+  enabled: true # Master toggle — set false to fully disable marketplace

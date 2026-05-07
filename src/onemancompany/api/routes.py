@@ -2048,6 +2048,15 @@ def _get_local_talent_count() -> int:
         return 0
 
 
+def _get_curated_skill_count() -> int:
+    """Count curated skill packages available."""
+    try:
+        from onemancompany.agents.onboarding import _CURATED_SKILL_NAMES
+        return len(_CURATED_SKILL_NAMES)
+    except ImportError:
+        return 0
+
+
 @router.get("/api/talent-pool")
 async def get_talent_pool() -> dict:
     """Return the talent pool — local packages always, cloud talents when connected."""
@@ -2194,6 +2203,17 @@ async def get_api_settings() -> dict:
         "use_ai_search": tm.get("use_ai_search", False),
     }
 
+    # Skills marketplace (stored in config.yaml, not .env)
+    sm = load_app_config().get("skills_market", {})
+    sm_key = sm.get("api_key", "") or settings.skillsmp_api_key
+    result["skills_market"] = {
+        "api_key_set": bool(sm_key),
+        "api_key_preview": ("..." + sm_key[-4:]) if len(sm_key) >= 4 else "",
+        "mode": sm.get("mode", "local"),
+        "enabled": sm.get("enabled", True),
+        "curated_skill_count": _get_curated_skill_count(),
+    }
+
     return result
 
 
@@ -2239,6 +2259,34 @@ async def update_api_settings(body: dict) -> dict:
                 "api_key_preview": ("..." + api_key[-4:]) if api_key and len(api_key) >= 4 else "",
                 "use_ai_search": tm.get("use_ai_search", False),
                 "mode": tm.get("mode", "local"),
+            },
+        }
+
+    if provider == "skills_market":
+        import yaml
+        from onemancompany.core.config import APP_CONFIG_PATH, load_app_config, reload_app_config
+        api_key = body.get("api_key", "")
+        has_toggle = "mode" in body or "enabled" in body
+        if not api_key and not has_toggle:
+            return {"error": "API key, mode, or enabled is required"}
+        config = load_app_config()
+        sm = config.setdefault("skills_market", {})
+        if api_key:
+            sm["api_key"] = api_key
+        if "mode" in body and body["mode"] in ("local", "remote", "local+remote"):
+            sm["mode"] = body["mode"]
+        if "enabled" in body:
+            sm["enabled"] = bool(body["enabled"])
+        write_text_utf(APP_CONFIG_PATH, yaml.dump(config, default_flow_style=False, allow_unicode=True))
+        reload_app_config()
+
+        return {
+            "status": "updated",
+            "skills_market": {
+                "api_key_set": bool(sm.get("api_key", "")),
+                "api_key_preview": ("..." + api_key[-4:]) if api_key and len(api_key) >= 4 else "",
+                "mode": sm.get("mode", "local"),
+                "enabled": sm.get("enabled", True),
             },
         }
 

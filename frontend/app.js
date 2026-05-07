@@ -5548,6 +5548,7 @@ class AppController {
       const settings = await settingsResp.json();
       const groups = await groupsResp.json();
       const tm = settings.talent_market || {};
+      const sm = settings.skills_market || {};
 
       const defaultProvider = settings.default_provider || 'openrouter';
       const defaultModel = settings.default_model || '';
@@ -5666,6 +5667,49 @@ class AppController {
         </div>
       `;
 
+      // Skills Marketplace card (dual-source)
+      const smCuratedCount = sm.curated_skill_count || 0;
+      const smMode = sm.mode || 'local';
+      const smEnabled = sm.enabled !== false;
+      html += `
+        <div class="api-provider-card">
+          <div class="api-card-header api-card-toggle" data-target="api-sm-body">
+            <span class="api-status-dot ${smEnabled ? 'online' : ''}"></span>
+            <span class="api-card-title">Skills Marketplace</span>
+            <span class="api-card-status">📦 ${smCuratedCount} Curated${sm.api_key_set ? ' | ☁️ Cloud' : ''}</span>
+            <span class="api-card-arrow">&#9660;</span>
+          </div>
+          <div id="api-sm-body" class="api-card-body collapsed">
+            <div class="tm-status-info" style="font-size:6.5px;margin-bottom:6px;color:var(--text-dim);">
+              <div style="margin-bottom:2px;">📦 <strong>${smCuratedCount}</strong> curated skills always available</div>
+              <div>${sm.api_key_set ? '☁️ Connected to SkillsMP marketplace' : '☁️ Cloud optional — add key below for 100+ community skills'}</div>
+            </div>
+            <div style="margin:6px 0;display:flex;align-items:center;gap:6px;">
+              <label style="font-size:6.5px;color:var(--text-dim);margin-right:2px;">Mode:</label>
+              <input type="hidden" id="api-sm-mode-val" value="${smMode}" />
+              <button class="pixel-btn small" id="api-sm-mode-local"
+                onclick="document.getElementById('api-sm-mode-val').value='local';this.style.borderColor='var(--pixel-green)';this.style.color='var(--pixel-green)';document.getElementById('api-sm-mode-remote').style.borderColor='';document.getElementById('api-sm-mode-remote').style.color='';document.getElementById('api-sm-mode-lr').style.borderColor='';document.getElementById('api-sm-mode-lr').style.color='';document.getElementById('api-sm-remote-opts').style.display='none'"
+                style="font-size:5.5px;padding:2px 6px;${smMode === 'local' ? 'border-color:var(--pixel-green);color:var(--pixel-green);' : ''}">📦 Local</button>
+              <button class="pixel-btn small" id="api-sm-mode-lr"
+                onclick="document.getElementById('api-sm-mode-val').value='local+remote';this.style.borderColor='var(--pixel-cyan)';this.style.color='var(--pixel-cyan)';document.getElementById('api-sm-mode-local').style.borderColor='';document.getElementById('api-sm-mode-local').style.color='';document.getElementById('api-sm-mode-remote').style.borderColor='';document.getElementById('api-sm-mode-remote').style.color='';document.getElementById('api-sm-remote-opts').style.display='block'"
+                style="font-size:5.5px;padding:2px 6px;${smMode === 'local+remote' ? 'border-color:var(--pixel-cyan);color:var(--pixel-cyan);' : ''}">📦+☁️ Both</button>
+              <button class="pixel-btn small" id="api-sm-mode-remote"
+                onclick="document.getElementById('api-sm-mode-val').value='remote';this.style.borderColor='var(--pixel-cyan)';this.style.color='var(--pixel-cyan)';document.getElementById('api-sm-mode-local').style.borderColor='';document.getElementById('api-sm-mode-local').style.color='';document.getElementById('api-sm-mode-lr').style.borderColor='';document.getElementById('api-sm-mode-lr').style.color='';document.getElementById('api-sm-remote-opts').style.display='block'"
+                style="font-size:5.5px;padding:2px 6px;${smMode === 'remote' ? 'border-color:var(--pixel-cyan);color:var(--pixel-cyan);' : ''}">☁️ Remote</button>
+            </div>
+            <div id="api-sm-remote-opts" style="${smMode !== 'local' ? '' : 'display:none;'}">
+              <label class="api-field-label">API Key</label>
+              <input type="password" id="api-sm-key" class="api-key-input" placeholder="${sm.api_key_set ? sm.api_key_preview : 'Enter key to enable Cloud Marketplace...'}" />
+              <div style="margin-top:4px;font-size:5.5px;color:var(--text-dim);">Register at skillsmp.com</div>
+            </div>
+            <div class="api-card-actions">
+              <button class="pixel-btn small" onclick="app._saveApiSettings('skills_market')">Save</button>
+              <span id="api-sm-result" class="api-test-result"></span>
+            </div>
+          </div>
+        </div>
+      `;
+
       container.innerHTML = html;
       // Bind toggle for provider cards + lazy-load models on expand
       container.querySelectorAll('.api-card-toggle').forEach(hdr => {
@@ -5696,6 +5740,26 @@ class AppController {
       const aiCheckbox = document.getElementById('api-tm-use-ai');
       if (aiCheckbox) body.use_ai_search = aiCheckbox.checked;
       const modeVal = document.getElementById('api-tm-mode-val');
+      if (modeVal) body.mode = modeVal.value;
+      try {
+        const resp = await fetch('/api/settings/api', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (data.status === 'updated') {
+          this._settingsLoaded = false;
+          this._renderApiSettings();
+        }
+      } catch (e) {
+        console.error('Save API settings error:', e);
+      }
+    } else if (provider === 'skills_market') {
+      const body = { provider };
+      const key = document.getElementById('api-sm-key').value.trim();
+      if (key) body.api_key = key;
+      const modeVal = document.getElementById('api-sm-mode-val');
       if (modeVal) body.mode = modeVal.value;
       try {
         const resp = await fetch('/api/settings/api', {
