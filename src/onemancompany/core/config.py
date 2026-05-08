@@ -1039,6 +1039,7 @@ def load_manifest(employee_id: str) -> dict | None:
         return MANIFEST_CACHE[employee_id]
     manifest_path = EMPLOYEES_DIR / employee_id / MANIFEST_FILENAME
     if not manifest_path.exists():
+        logger.trace("load_manifest({}): not found at {}", employee_id, manifest_path)
         return None
     data = json.loads(manifest_path.read_text(encoding=ENCODING_UTF8))
     MANIFEST_CACHE[employee_id] = data
@@ -1060,25 +1061,29 @@ def repair_founder_manifests() -> int:
     """
     import shutil
 
-    pkg_dir = Path(__file__).resolve().parent.parent.parent.parent / "company"
+    pkg_dir = SOURCE_ROOT / "company"
     if not pkg_dir.exists():
-        logger.debug("repair_founder_manifests: no package company/ dir at {}", pkg_dir)
+        logger.warning("repair_founder_manifests: no package company/ dir at {} (SOURCE_ROOT={})", pkg_dir, SOURCE_ROOT)
         return 0
 
+    logger.debug("repair_founder_manifests: pkg_dir={}, EMPLOYEES_DIR={}", pkg_dir, EMPLOYEES_DIR)
     repaired = 0
     for fid in FOUNDING_IDS:
         dst = EMPLOYEES_DIR / fid / MANIFEST_FILENAME
         if dst.exists():
+            logger.trace("repair_founder_manifests: {} manifest already present at {}", fid, dst)
             continue
         src = pkg_dir / "human_resource" / "employees" / fid / MANIFEST_FILENAME
         if not src.exists():
+            logger.debug("repair_founder_manifests: no template manifest for {} at {}", fid, src)
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(src), str(dst))
         repaired += 1
-        logger.debug("repair_founder_manifests: copied manifest for {}", fid)
+        logger.debug("repair_founder_manifests: copied manifest for {} → {}", src, dst)
     if repaired:
         logger.info("repair_founder_manifests: repaired {} manifests", repaired)
+        invalidate_manifest_cache()
     return repaired
 
 
