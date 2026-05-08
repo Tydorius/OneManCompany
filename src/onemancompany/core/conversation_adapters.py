@@ -145,12 +145,26 @@ def _build_conversation_prompt(
             "requirement), ask: 'Should I create a new project or add to the existing one?'"
         )
 
+    max_msg_chars = 3000
+    history_budget = 50000
+
     if messages:
         lines.append("\n--- Conversation History ---")
+        total_history = 0
         for msg in messages:
-            lines.append(f"[{msg.role}]: {msg.text}")
+            text = msg.text
+            if len(text) > max_msg_chars:
+                text = text[:max_msg_chars] + "\n[... message truncated ...]"
+            if total_history + len(text) > history_budget:
+                lines.append("[... earlier messages omitted to fit context ...]")
+                break
+            lines.append(f"[{msg.role}]: {text}")
+            total_history += len(text)
 
-    lines.append(f"\n[{new_message.role}]: {new_message.text}")
+    new_text = new_message.text
+    if len(new_text) > max_msg_chars:
+        new_text = new_text[:max_msg_chars] + "\n[... message truncated ...]"
+    lines.append(f"\n[{new_message.role}]: {new_text}")
     lines.append("\nPlease respond:")
     return "\n".join(lines)
 
@@ -248,7 +262,8 @@ class _BaseConversationAdapter:
         from onemancompany.core.runtime_context import _interaction_type, _interaction_work_dir
         from onemancompany.core.tool_registry import tool_registry
         from onemancompany.agents.base import make_llm, extract_final_content
-        from langchain_core.messages import HumanMessage
+        from langchain_core.messages import HumanMessage, ToolMessage, AIMessage
+        from onemancompany.core.model_router import get_context_window
 
         logger.debug(
             "[conversation] _send_ea_chat: employee={}, tool_count={}",
@@ -266,7 +281,64 @@ class _BaseConversationAdapter:
         from langgraph.prebuilt import create_react_agent
 
         llm = make_llm(conversation.employee_id)
-        agent = create_react_agent(model=llm, tools=tools)
+
+        # Context guard: truncate accumulated messages to stay within context window
+        _ctx_tokens = get_context_window(conversation.employee_id)
+        _max_msg_chars = int(_ctx_tokens * 4 * 0.75)
+        _tool_result_max = 3000
+
+        async def _context_guard(state):
+            msgs = state.get("messages", [])
+            if not msgs:
+                return {"llm_input_messages": []}
+
+            truncated = []
+            for m in msgs:
+                content = getattr(m, "content", "")
+                if isinstance(content, str) and len(content) > _tool_result_max and isinstance(m, ToolMessage):
+                    truncated.append(
+                        ToolMessage(
+                            content=content[:_tool_result_max] + "\n[... tool result truncated ...]",
+                            tool_call_id=m.tool_call_id,
+                        )
+                    )
+                else:
+                    truncated.append(m)
+
+            total = sum(len(str(getattr(m, "content", ""))) for m in truncated)
+            if total <= _max_msg_chars:
+                logger.debug(
+                    "[conversation] context_guard: {} messages, {} chars (budget {})",
+                    len(truncated), total, _max_msg_chars,
+                )
+                return {"llm_input_messages": truncated}
+
+            # Over budget: keep first message + last messages that fit
+            first = truncated[0]
+            budget = _max_msg_chars - len(str(getattr(first, "content", "")))
+            kept = []
+            for m in reversed(truncated[1:]):
+                clen = len(str(getattr(m, "content", "")))
+                if budget >= clen:
+                    kept.insert(0, m)
+                    budget -= clen
+                else:
+                    break
+
+            logger.warning(
+                "[conversation] context_guard: truncated {} -> {} messages ({} chars -> budget {})",
+                len(truncated), 1 + len(kept), total, _max_msg_chars,
+            )
+            return {"llm_input_messages": [first] + kept}
+
+        logger.debug(
+            "[conversation] _send_ea_chat context budget: {} tokens, {} max chars",
+            _ctx_tokens, _max_msg_chars,
+        )
+
+        agent = create_react_agent(
+            model=llm, tools=tools, pre_model_hook=_context_guard,
+        )
 
         tok_type = _interaction_type.set(conversation.type)
         tok_work = _interaction_work_dir.set(work_dir)
