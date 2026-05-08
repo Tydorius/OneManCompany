@@ -516,6 +516,36 @@
     </div>
   </div>
 
+  <!-- Hosting Remap Modal -->
+  <div id="hosting-remap-modal" class="modal-overlay hidden">
+    <div class="modal-content hosting-remap-modal-content">
+      <div class="modal-header">
+        <h3 class="pixel-title">&#128295; Hosting Remap</h3>
+        <button id="remap-close-btn" class="modal-close">&#10005;</button>
+      </div>
+      <div class="modal-body hosting-remap-body">
+        <p class="remap-explanation">Some candidates require Claude CLI (self-hosted). Remap them to your provider to hire as company-hosted employees.</p>
+        <div id="remap-candidates-list" class="remap-candidates-list"></div>
+      </div>
+      <div class="remap-actions">
+        <button id="remap-audit-btn" class="pixel-btn secondary">&#128270; Audit Skills</button>
+        <button id="remap-cancel-btn" class="pixel-btn secondary">Cancel</button>
+        <button id="remap-confirm-btn" class="pixel-btn">Confirm &amp; Continue</button>
+      </div>
+      <!-- Skill Audit Results (shown inline after audit) -->
+      <div id="remap-audit-panel" class="remap-audit-panel hidden">
+        <div class="remap-audit-header">
+          <span class="remap-audit-title">&#128270; Skill Audit Results</span>
+          <span id="remap-audit-model-badge" class="interview-model-badge"></span>
+        </div>
+        <div id="remap-audit-progress" class="remap-audit-progress hidden">
+          <span class="remap-audit-progress-text">Auditing skills...</span>
+        </div>
+        <div id="remap-audit-results" class="remap-audit-results"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Onboarding Progress Toast (non-blocking, bottom-right corner) -->
   <div id="onboarding-progress-modal" class="onboarding-toast hidden">
     <div class="onboarding-toast-header">

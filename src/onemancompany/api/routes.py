@@ -1433,6 +1433,255 @@ async def _fetch_provider_models(provider: str) -> dict:
         return {"models": [], "error": str(e)[:200]}
 
 
+@router.get("/api/providers")
+async def list_configured_providers() -> dict:
+    """List providers that have API keys configured in company settings."""
+    from onemancompany.core.config import PROVIDER_REGISTRY, settings as _cfg_settings
+
+    providers = []
+    for pid, cfg in PROVIDER_REGISTRY.items():
+        key = getattr(_cfg_settings, cfg.env_key, "")
+        if key:
+            providers.append({
+                "id": pid,
+                "name": pid.replace("_", " ").title(),
+                "has_key": True,
+                "chat_class": cfg.chat_class,
+            })
+    return {"providers": providers, "default": _cfg_settings.default_api_provider or "openrouter"}
+
+
+# ---------------------------------------------------------------------------
+# Skill audit — LLM-powered platform-lock detection
+# ---------------------------------------------------------------------------
+
+_SKILL_AUDITOR_PROMPT = """\
+You are a skill compatibility auditor. You will be given the content of a SKILL.md \
+file from an AI agent platform. Your job is to identify any platform-specific \
+hooks, references, or dependencies that would NOT work on a generic LLM agent.
+
+Look for:
+1. Config file paths specific to a platform (e.g., ~/.claude/settings.json, .cursor/config)
+2. CLI commands that call a specific binary (e.g., `claude`, `cursor`, `kilo`)
+3. Tool/event names from specific platforms (e.g., PreToolUse, PostToolUse, Stop hooks)
+4. API authentication patterns specific to one provider
+5. Environment variable names tied to a specific platform
+6. Shell scripts or hooks that assume a specific runtime environment
+7. File paths or directory structures specific to one platform
+
+For each finding, report:
+- platform: which platform/tool it targets
+- type: one of "config_reference", "cli_call", "tool_name", "auth_pattern", "env_var", "script_hook", "file_path"
+- detail: the specific text that triggered the finding
+- severity: "high" (will break), "medium" (degraded functionality), "low" (cosmetic)
+
+If the skill is entirely generic (standard markdown instructions with no platform \
+ties), respond with status "clean" and empty findings.
+
+Respond in JSON only:
+{"status": "clean"|"flagged", "findings": [{"platform": "...", "type": "...", "detail": "...", "severity": "..."}]}
+"""
+
+_SKILL_REWRITER_PROMPT = """\
+You are a skill rewriter for a multi-platform AI agent system. You will be given \
+a SKILL.md file that contains platform-specific hooks (identified in the audit \
+findings below). Your job is to rewrite the skill to be platform-agnostic while \
+preserving its core behavioral instructions.
+
+Rules:
+1. Keep all behavioral instructions, step-by-step procedures, and decision logic
+2. Remove or replace platform-specific config file paths with generic equivalents
+3. Replace CLI commands with generic descriptions of the intended action
+4. Replace platform-specific tool/event names with generic descriptions
+5. Remove auth patterns tied to a specific provider
+6. Keep the YAML frontmatter intact (name, description, autoload, etc.)
+7. If a hook is essential to the skill's purpose, replace it with a comment \
+   describing what should happen at that point
+
+Audit findings to address:
+{findings_json}
+
+Original skill content:
+{skill_content}
+
+Return the complete rewritten SKILL.md content. Do not wrap in code fences.
+"""
+
+
+def _load_skill_content(skill_name: str) -> str:
+    """Load SKILL.md content from curated skills, default skills, or talent skill dirs."""
+    pkg_dir = Path(__file__).resolve().parent.parent
+
+    curated = pkg_dir / "curated_skills" / skill_name / "SKILL.md"
+    if curated.exists():
+        return curated.read_text(encoding="utf-8")
+
+    default = pkg_dir / "default_skills" / skill_name / "SKILL.md"
+    if default.exists():
+        return default.read_text(encoding="utf-8")
+
+    try:
+        from onemancompany.core.config import settings as _s
+        talents_dir = Path(_s.company_dir) / "talents"
+        if talents_dir.exists():
+            for talent_dir in talents_dir.iterdir():
+                skill_file = talent_dir / "skills" / skill_name / "SKILL.md"
+                if skill_file.exists():
+                    return skill_file.read_text(encoding="utf-8")
+    except Exception:
+        pass
+
+    return ""
+
+
+async def _make_auditor_llm(model: str = "", api_provider: str = ""):
+    """Create an LLM instance for skill auditing without an employee profile."""
+    from onemancompany.core.config import settings as _s
+    from onemancompany.agents.base import _resolve_provider_key, CHAT_CLASS_OPENAI, CHAT_CLASS_ANTHROPIC
+    from onemancompany.core.config import PROVIDER_REGISTRY
+
+    _model = model or _s.default_llm_model
+    _provider = api_provider or _s.default_api_provider or "openrouter"
+    prov = PROVIDER_REGISTRY.get(_provider)
+    if not prov:
+        return None
+
+    api_key = _resolve_provider_key(_provider, "")
+    if not api_key:
+        return None
+
+    base_url = _s.default_api_base_url if _provider == "custom" and _s.default_api_base_url else prov.base_url
+
+    if prov.chat_class == CHAT_CLASS_ANTHROPIC:
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(model=_model, api_key=api_key, base_url=base_url or None,
+                             temperature=0.3, max_retries=2, timeout=120.0)
+    else:
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=_model, api_key=api_key, base_url=base_url,
+                          temperature=0.3, max_retries=2, timeout=120.0)
+
+
+@router.post("/api/candidates/audit-skills")
+async def audit_skills(body: dict) -> dict:
+    """Audit selected candidates' skills for platform-specific hooks using an LLM."""
+    import json as _json
+
+    from onemancompany.agents.recruitment import pending_candidates
+
+    batch_id = body.get("batch_id", "")
+    candidate_ids = body.get("candidate_ids", [])
+    evaluator_model = body.get("evaluator_model", "")
+    evaluator_provider = body.get("evaluator_provider", "")
+
+    if not candidate_ids:
+        return {"results": [], "evaluator_model_used": evaluator_model, "error": "No candidates specified"}
+
+    llm = await _make_auditor_llm(evaluator_model, evaluator_provider)
+    if not llm:
+        return {"results": [], "evaluator_model_used": evaluator_model, "error": "No LLM available for auditing"}
+
+    all_candidates = pending_candidates.get(batch_id, [])
+    results = []
+
+    for cid in candidate_ids:
+        candidate = next((c for c in all_candidates if (c.get("id") or c.get("talent_id")) == cid), None)
+        if not candidate:
+            continue
+
+        skills = candidate.get("skill_set", candidate.get("skills", []))
+        for skill in skills:
+            skill_name = skill if isinstance(skill, str) else skill.get("name", "")
+            if not skill_name:
+                continue
+            skill_content = _load_skill_content(skill_name)
+            if not skill_content:
+                results.append({
+                    "skill_name": skill_name, "candidate_id": cid,
+                    "status": "error", "findings": [],
+                    "error": "Skill content not found",
+                    "skill_content_preview": "",
+                })
+                continue
+
+            try:
+                from langchain_core.messages import HumanMessage
+                prompt = _SKILL_AUDITOR_PROMPT + "\n\n--- SKILL CONTENT ---\n" + skill_content
+                response = await llm.ainvoke([HumanMessage(content=prompt)])
+                raw = response.content.strip()
+                if raw.startswith("```"):
+                    raw = re.sub(r"^```(?:json)?\n?", "", raw)
+                    raw = re.sub(r"\n?```$", "", raw)
+                parsed = _json.loads(raw)
+                results.append({
+                    "skill_name": skill_name,
+                    "candidate_id": cid,
+                    "status": parsed.get("status", "error"),
+                    "findings": parsed.get("findings", []),
+                    "skill_content_preview": skill_content[:200],
+                })
+            except Exception as e:
+                logger.warning("[skill-audit] Failed to audit skill '{}': {}", skill_name, e)
+                results.append({
+                    "skill_name": skill_name, "candidate_id": cid,
+                    "status": "error", "findings": [],
+                    "error": str(e)[:200],
+                    "skill_content_preview": skill_content[:200],
+                })
+
+    return {"results": results, "evaluator_model_used": evaluator_model or "default"}
+
+
+@router.post("/api/candidates/rewrite-skill")
+async def rewrite_skill(body: dict) -> dict:
+    """Rewrite a flagged skill to be platform-agnostic using an LLM."""
+    import json as _json
+
+    from onemancompany.core.config import settings as _s
+
+    skill_name = body.get("skill_name", "")
+    findings = body.get("findings", [])
+    rewriter_model = body.get("rewriter_model", "")
+    rewriter_provider = body.get("rewriter_provider", "")
+
+    if not skill_name:
+        return {"status": "error", "error": "skill_name is required"}
+
+    original = _load_skill_content(skill_name)
+    if not original:
+        return {"status": "error", "error": f"Skill '{skill_name}' not found"}
+
+    llm = await _make_auditor_llm(rewriter_model, rewriter_provider)
+    if not llm:
+        return {"status": "error", "error": "No LLM available for rewriting"}
+
+    try:
+        from langchain_core.messages import HumanMessage
+        prompt = _SKILL_REWRITER_PROMPT.format(
+            findings_json=_json.dumps(findings, indent=2),
+            skill_content=original,
+        )
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        rewritten = response.content.strip()
+        if rewritten.startswith("```"):
+            rewritten = re.sub(r"^```(?:markdown|md)?\n?", "", rewritten)
+            rewritten = re.sub(r"\n?```$", "", rewritten)
+
+        rewrites_dir = Path(_s.company_dir) / ".skill_rewrites"
+        rewrites_dir.mkdir(parents=True, exist_ok=True)
+        (rewrites_dir / f"{skill_name}.md").write_text(rewritten, encoding="utf-8")
+
+        return {
+            "status": "success",
+            "skill_name": skill_name,
+            "original_preview": original[:200],
+            "rewritten_preview": rewritten[:200],
+        }
+    except Exception as e:
+        logger.exception("[skill-rewrite] Failed to rewrite skill '{}'", skill_name)
+        return {"status": "error", "skill_name": skill_name, "error": str(e)[:200]}
+
+
 @router.get("/api/employee/{employee_id}")
 async def get_employee_detail(employee_id: str) -> dict:
     """Get full employee details including work principles, model config, and manifest."""
@@ -4477,6 +4726,11 @@ def _fill_talent_defaults(talent_data: dict) -> None:
 
     Non-self-hosted talents that lack llm_model, api_provider, or auth_method
     get the company's default values instead of failing validation.
+
+    Additionally, if a talent specifies an api_provider that has no configured
+    key in the company settings, the provider is overridden to the company
+    default — this handles the common case where local talent specs hardcode
+    "openrouter" but the company uses a custom/self-hosted provider.
     """
     hosting = talent_data.get("hosting", "")
     if hosting in ("self", HostingMode.SELF):
@@ -4488,6 +4742,20 @@ def _fill_talent_defaults(talent_data: dict) -> None:
     if not talent_data.get("api_provider"):
         talent_data["api_provider"] = _settings.default_api_provider or "openrouter"
         logger.info("[hiring] Talent missing api_provider — using default: {}", talent_data["api_provider"])
+
+    # Verify the resolved api_provider actually has a key configured.
+    # Talent specs may hardcode "openrouter" but the company may use "custom".
+    from onemancompany.agents.base import _resolve_provider_key
+    current_provider = talent_data.get("api_provider", "")
+    resolved_key = _resolve_provider_key(current_provider, "")
+    if not resolved_key:
+        company_provider = _settings.default_api_provider or "openrouter"
+        company_key = _resolve_provider_key(company_provider, "")
+        if company_key and company_provider != current_provider:
+            logger.info("[hiring] Talent api_provider '{}' has no key — overriding to company default '{}'",
+                        current_provider, company_provider)
+            talent_data["api_provider"] = company_provider
+
     if not talent_data.get("auth_method"):
         talent_data["auth_method"] = "api_key"
 
@@ -5072,6 +5340,20 @@ async def _do_batch_hire(
             # Fill missing LLM config with company defaults
             _fill_talent_defaults(talent_data)
 
+            # Apply hosting remap if the user requested it
+            remap_hosting = sel.get("remap_hosting")
+            original_hosting = talent_data.get("hosting", "")
+            if remap_hosting and original_hosting in ("self", HostingMode.SELF.value):
+                talent_data["hosting"] = remap_hosting
+                talent_data["api_provider"] = sel.get("remap_api_provider", settings.default_api_provider)
+                talent_data["llm_model"] = sel.get("remap_llm_model", settings.default_llm_model)
+                talent_data["auth_method"] = "api_key"
+                talent_data.pop("claude_plugins", None)
+                logger.info("[batch-hire] Remapping {}: hosting:{} → hosting:{}, provider:{} → provider:{}, model:{}",
+                            candidate_id, original_hosting, remap_hosting,
+                            original_hosting, talent_data["api_provider"], talent_data["llm_model"])
+                _fill_talent_defaults(talent_data)
+
             # Validate required fields
             missing = _check_talent_required_fields(talent_data)
             if missing:
@@ -5136,6 +5418,18 @@ async def _do_batch_hire(
                     progress_callback=progress_cb,
                 )
                 results.append({"candidate_id": candidate_id, "status": "hired", "employee_id": emp.id, "name": cand_name, "nickname": nickname})
+
+                # Apply pending skill rewrites (from /api/candidates/rewrite-skill)
+                from onemancompany.core.config import EMPLOYEES_DIR as _EMP_DIR
+                rewrites_dir = Path(settings.company_dir) / ".skill_rewrites"
+                emp_skills_dir = _EMP_DIR / str(emp.id) / "skills"
+                if rewrites_dir.exists() and emp_skills_dir.exists():
+                    for skill_dir in emp_skills_dir.iterdir():
+                        rewrite = rewrites_dir / f"{skill_dir.name}.md"
+                        if rewrite.exists():
+                            target = skill_dir / "SKILL.md"
+                            target.write_text(rewrite.read_text(encoding="utf-8"), encoding="utf-8")
+                            logger.info("[batch-hire] Applied rewritten skill '{}' to employee {}", skill_dir.name, emp.id)
 
                 if coo_ctx.get("project_id"):
                     auth_method = talent_data.get("auth_method", "api_key")

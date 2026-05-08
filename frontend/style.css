@@ -2075,6 +2075,216 @@ h3.pixel-title { font-size: var(--text-label); }
   box-shadow: 0 0 12px rgba(0, 255, 136, 0.4);
 }
 
+/* ===== Hosting Remap Modal ===== */
+.hosting-remap-modal-content {
+  max-width: 640px;
+  max-height: 85vh;
+  border-color: var(--pixel-blue);
+  box-shadow: 0 0 40px rgba(100, 149, 237, 0.15);
+}
+
+.hosting-remap-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-height: calc(85vh - 140px);
+  overflow-y: auto;
+}
+
+.remap-explanation {
+  font-size: var(--text-label);
+  color: var(--text-dim);
+  margin: 0;
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.remap-candidates-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.remap-candidate-card {
+  border: 1px solid var(--border);
+  background: rgba(22, 22, 42, 0.6);
+  padding: var(--sp-2);
+}
+
+.remap-candidate-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--sp-1);
+}
+
+.remap-candidate-name {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.remap-candidate-role {
+  font-size: var(--text-small);
+  color: var(--text-dim);
+}
+
+.remap-candidate-original {
+  font-size: var(--text-small);
+  color: var(--pixel-red, #f44);
+  margin-bottom: var(--sp-1);
+}
+
+.remap-field-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-bottom: 4px;
+}
+
+.remap-field-label {
+  font-size: var(--text-small);
+  color: var(--text-dim);
+  min-width: 70px;
+}
+
+.remap-field-select {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  background: var(--bg-dark);
+  color: var(--text-bright);
+  border: 1px solid var(--border);
+  padding: 3px 6px;
+}
+
+.remap-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border-top: 1px solid var(--border);
+}
+
+.remap-audit-panel {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-2);
+}
+
+.remap-audit-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-1);
+}
+
+.remap-audit-title {
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+.remap-audit-progress {
+  text-align: center;
+  padding: var(--sp-2);
+}
+
+.remap-audit-progress-text {
+  font-size: var(--text-small);
+  color: var(--text-dim);
+}
+
+.remap-audit-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.remap-audit-skill {
+  border: 1px solid var(--border);
+  padding: var(--sp-1);
+  font-size: var(--text-small);
+}
+
+.remap-audit-skill.clean {
+  border-color: var(--pixel-green, #4caf50);
+}
+
+.remap-audit-skill.flagged {
+  border-color: var(--pixel-yellow);
+}
+
+.remap-audit-skill.error {
+  border-color: var(--pixel-red, #f44);
+}
+
+.remap-audit-skill-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.remap-audit-skill-name {
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.remap-audit-skill-status {
+  font-size: var(--text-small);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+}
+
+.remap-audit-finding {
+  padding: 2px 0 2px 12px;
+  color: var(--text-dim);
+  font-size: var(--text-small);
+}
+
+.remap-audit-finding .severity-high { color: var(--pixel-red, #f44); }
+.remap-audit-finding .severity-medium { color: var(--pixel-yellow); }
+.remap-audit-finding .severity-low { color: var(--text-dim); }
+
+.remap-audit-rewrite-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-top: 4px;
+}
+
+.remap-audit-rewrite-select {
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  background: var(--bg-dark);
+  color: var(--text-bright);
+  border: 1px solid var(--border);
+  padding: 2px 4px;
+}
+
+.remap-audit-rewrite-btn {
+  font-size: var(--text-small);
+  padding: 2px 8px;
+  cursor: pointer;
+  background: var(--bg-dark);
+  color: var(--text-bright);
+  border: 1px solid var(--pixel-blue);
+}
+
+.remap-audit-rewrite-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.remap-audit-warning {
+  font-size: var(--text-small);
+  color: var(--pixel-yellow);
+  padding: var(--sp-1);
+  border: 1px dashed var(--pixel-yellow);
+  margin-top: var(--sp-1);
+}
+
 /* ===== Onboarding Progress Toast (non-blocking) ===== */
 .onboarding-toast {
   position: fixed;

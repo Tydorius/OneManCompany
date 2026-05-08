@@ -1033,6 +1033,12 @@ class AppController {
       if (e.target.id === 'talent-pool-modal') this.closeTalentPool();
     });
 
+    // Hosting remap modal bindings
+    document.getElementById('remap-close-btn').addEventListener('click', () => this._closeRemapModal());
+    document.getElementById('remap-cancel-btn').addEventListener('click', () => this._closeRemapModal());
+    document.getElementById('remap-confirm-btn').addEventListener('click', () => this._confirmRemapAndHire());
+    document.getElementById('remap-audit-btn').addEventListener('click', () => this._auditSkills());
+
     // Interview chatbot modal bindings
     document.getElementById('interview-close-btn').addEventListener('click', () => this.closeInterviewModal());
     document.getElementById('interview-modal').addEventListener('click', (e) => {
@@ -4213,6 +4219,23 @@ class AppController {
 
     if (!selections.length) return;
 
+    // Check if any selected candidate has hosting: self
+    const selfHosted = selections.filter(sel => {
+      const c = this._selectedCandidates.get(sel.candidate_id);
+      return c && c.candidate && c.candidate.hosting === 'self';
+    });
+
+    if (selfHosted.length > 0) {
+      this._pendingRemapSelections = selections;
+      this._pendingRemapBatchId = this._candidateBatchId;
+      this._showHostingRemapDialog(selfHosted);
+      return;
+    }
+
+    this._doBatchHire(selections, this._candidateBatchId);
+  }
+
+  _doBatchHire(selections, batchId, remapOverrides = {}) {
     // Disable button
     const btn = document.getElementById('candidate-batch-hire-btn');
     btn.disabled = true;
@@ -4220,12 +4243,17 @@ class AppController {
 
     this.logEntry('CEO', `Batch hiring ${selections.length} candidate(s)...`, 'ceo');
 
-    // Save batch_id — closeCandidateModal won't clear it when _batchHired=true,
-    // but keep a local copy as defensive measure
-    const batchId = this._candidateBatchId;
-
     // Mark as hired so closeCandidateModal won't dismiss or clear batch_id
     this._batchHired = true;
+
+    // Build selections with remap overrides applied
+    const finalSelections = selections.map(sel => {
+      const remap = remapOverrides[sel.candidate_id];
+      if (remap) {
+        return { ...sel, ...remap };
+      }
+      return sel;
+    });
 
     // Show onboarding progress modal
     this._onboardingBatchId = batchId;
@@ -4241,7 +4269,7 @@ class AppController {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         batch_id: batchId,
-        selections,
+        selections: finalSelections,
       }),
     })
       .then(r => r.json())
@@ -4255,6 +4283,266 @@ class AppController {
       .catch(err => {
         this.logEntry('SYSTEM', `Batch hire error: ${err.message}`, 'system');
       });
+  }
+
+  _showHostingRemapDialog(selfHostedCandidates) {
+    const modal = document.getElementById('hosting-remap-modal');
+    const list = document.getElementById('remap-candidates-list');
+    const auditPanel = document.getElementById('remap-audit-panel');
+    auditPanel.classList.add('hidden');
+    document.getElementById('remap-audit-results').innerHTML = '';
+    list.innerHTML = '';
+
+    this._remapModels = [];
+    this._remapProviders = [];
+
+    // Fetch models and providers
+    Promise.all([
+      fetch('/api/models').then(r => r.json()).catch(() => ({ models: [] })),
+      fetch('/api/providers').then(r => r.json()).catch(() => ({ providers: [] })),
+    ]).then(([modelsData, providersData]) => {
+      this._remapModels = modelsData.models || [];
+      this._remapProviders = providersData.providers || [];
+      this._remapDefaultProvider = providersData.default || '';
+
+      for (const sel of selfHostedCandidates) {
+        const c = this._selectedCandidates.get(sel.candidate_id);
+        const candidate = c ? c.candidate : {};
+        const name = candidate.name || sel.candidate_id;
+        const role = candidate.role || sel.role || '';
+
+        const card = document.createElement('div');
+        card.className = 'remap-candidate-card';
+        card.dataset.candidateId = sel.candidate_id;
+
+        const modelOptions = this._remapModels.map(m =>
+          `<option value="${this._escapeHtml(m.id)}">${this._escapeHtml(m.name || m.id)}</option>`
+        ).join('');
+        const providerOptions = this._remapProviders.map(p =>
+          `<option value="${this._escapeHtml(p.id)}" ${p.id === this._remapDefaultProvider ? 'selected' : ''}>${this._escapeHtml(p.name)}</option>`
+        ).join('');
+
+        card.innerHTML = `
+          <div class="remap-candidate-header">
+            <span class="remap-candidate-name">${this._escapeHtml(name)}</span>
+            <span class="remap-candidate-role">${this._escapeHtml(role)}</span>
+          </div>
+          <div class="remap-candidate-original">Original: hosting: self (Claude CLI)</div>
+          <div class="remap-field-row">
+            <span class="remap-field-label">Model:</span>
+            <select class="remap-field-select remap-model-select" data-candidate-id="${this._escapeHtml(sel.candidate_id)}">
+              <option value="">(default)</option>
+              ${modelOptions}
+            </select>
+          </div>
+          <div class="remap-field-row">
+            <span class="remap-field-label">Provider:</span>
+            <select class="remap-field-select remap-provider-select" data-candidate-id="${this._escapeHtml(sel.candidate_id)}">
+              ${providerOptions}
+            </select>
+          </div>
+        `;
+        list.appendChild(card);
+      }
+    });
+
+    modal.classList.remove('hidden');
+  }
+
+  _closeRemapModal() {
+    document.getElementById('hosting-remap-modal').classList.add('hidden');
+    this._pendingRemapSelections = null;
+    this._pendingRemapBatchId = null;
+
+    // Re-enable batch hire button
+    const btn = document.getElementById('candidate-batch-hire-btn');
+    btn.disabled = false;
+    btn.textContent = `RECRUIT PARTY (${this._selectedCandidates.size})`;
+  }
+
+  _confirmRemapAndHire() {
+    const remapOverrides = {};
+    const cards = document.querySelectorAll('.remap-candidate-card');
+
+    for (const card of cards) {
+      const cid = card.dataset.candidateId;
+      const modelSelect = card.querySelector(`.remap-model-select[data-candidate-id="${cid}"]`);
+      const providerSelect = card.querySelector(`.remap-provider-select[data-candidate-id="${cid}"]`);
+      remapOverrides[cid] = {
+        remap_hosting: 'company',
+        remap_llm_model: modelSelect ? modelSelect.value : '',
+        remap_api_provider: providerSelect ? providerSelect.value : '',
+      };
+    }
+
+    const selections = this._pendingRemapSelections;
+    const batchId = this._pendingRemapBatchId;
+
+    document.getElementById('hosting-remap-modal').classList.add('hidden');
+    this._pendingRemapSelections = null;
+    this._pendingRemapBatchId = null;
+
+    this._doBatchHire(selections, batchId, remapOverrides);
+  }
+
+  async _auditSkills() {
+    const auditPanel = document.getElementById('remap-audit-panel');
+    const resultsDiv = document.getElementById('remap-audit-results');
+    const progressDiv = document.getElementById('remap-audit-progress');
+    const modelBadge = document.getElementById('remap-audit-model-badge');
+
+    resultsDiv.innerHTML = '';
+    progressDiv.classList.remove('hidden');
+
+    // Use first provider's model or company default
+    const evaluatorProvider = this._remapProviders.length > 0 ? this._remapProviders[0].id : '';
+    const evaluatorModel = this._remapModels.length > 0 ? this._remapModels[0].id : '';
+
+    modelBadge.textContent = evaluatorModel || 'default';
+
+    const candidateIds = this._pendingRemapSelections
+      ? this._pendingRemapSelections.map(s => s.candidate_id)
+      : [];
+
+    try {
+      const resp = await fetch('/api/candidates/audit-skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          batch_id: this._pendingRemapBatchId || '',
+          candidate_ids: candidateIds,
+          evaluator_model: evaluatorModel,
+          evaluator_provider: evaluatorProvider,
+        }),
+      });
+      const data = await resp.json();
+      progressDiv.classList.add('hidden');
+
+      if (data.error) {
+        resultsDiv.innerHTML = `<div class="remap-audit-skill error">Error: ${this._escapeHtml(data.error)}</div>`;
+        return;
+      }
+
+      const modelUsed = data.evaluator_model_used || 'unknown';
+      modelBadge.textContent = modelUsed;
+
+      // Group results by skill name (deduplicate across candidates)
+      const seen = new Set();
+      for (const r of (data.results || [])) {
+        if (seen.has(r.skill_name)) continue;
+        seen.add(r.skill_name);
+
+        const statusClass = r.status === 'clean' ? 'clean' : r.status === 'flagged' ? 'flagged' : 'error';
+        const statusLabel = r.status === 'clean' ? '✅ Clean' : r.status === 'flagged' ? '⚠️ Flagged' : '❌ Error';
+
+        const el = document.createElement('div');
+        el.className = `remap-audit-skill ${statusClass}`;
+
+        let findingsHtml = '';
+        if (r.findings && r.findings.length > 0) {
+          findingsHtml = r.findings.map(f => {
+            const sev = f.severity || 'low';
+            return `<div class="remap-audit-finding">
+              <span class="severity-${sev}">[${sev.toUpperCase()}]</span>
+              ${this._escapeHtml(f.type || '')}: ${this._escapeHtml(f.detail || '')}
+              <span style="color:var(--text-dim)">(${this._escapeHtml(f.platform || '')})</span>
+            </div>`;
+          }).join('');
+
+          const rewriteOptions = this._remapModels.map(m =>
+            `<option value="${this._escapeHtml(m.id)}">${this._escapeHtml(m.name || m.id)}</option>`
+          ).join('');
+          findingsHtml += `
+            <div class="remap-audit-rewrite-row">
+              <span class="remap-field-label">Rewrite with:</span>
+              <select class="remap-audit-rewrite-select" data-skill="${this._escapeHtml(r.skill_name)}">
+                ${rewriteOptions}
+              </select>
+              <button class="remap-audit-rewrite-btn" data-skill="${this._escapeHtml(r.skill_name)}"
+                      data-findings='${JSON.stringify(r.findings).replace(/'/g, "&#39;")}'>
+                🔄 Rewrite
+              </button>
+            </div>`;
+        }
+
+        if (r.error) {
+          findingsHtml = `<div class="remap-audit-finding">${this._escapeHtml(r.error)}</div>`;
+        }
+
+        el.innerHTML = `
+          <div class="remap-audit-skill-header">
+            <span class="remap-audit-skill-name">${this._escapeHtml(r.skill_name)}</span>
+            <span class="remap-audit-skill-status">${statusLabel}</span>
+          </div>
+          ${findingsHtml}
+        `;
+
+        resultsDiv.appendChild(el);
+      }
+
+      // Bind rewrite buttons
+      resultsDiv.querySelectorAll('.remap-audit-rewrite-btn').forEach(btn => {
+        btn.addEventListener('click', () => this._rewriteSkill(btn));
+      });
+
+      // Add warning
+      const warning = document.createElement('div');
+      warning.className = 'remap-audit-warning';
+      warning.textContent = '⚠ Rewritten skills may lose platform-specific optimizations. Quality depends on the evaluating model\'s capabilities.';
+      resultsDiv.appendChild(warning);
+
+    } catch (err) {
+      progressDiv.classList.add('hidden');
+      resultsDiv.innerHTML = `<div class="remap-audit-skill error">Error: ${this._escapeHtml(err.message)}</div>`;
+    }
+
+    auditPanel.classList.remove('hidden');
+  }
+
+  async _rewriteSkill(btn) {
+    const skillName = btn.dataset.skill;
+    const select = btn.closest('.remap-audit-rewrite-row').querySelector('.remap-audit-rewrite-select');
+    const model = select ? select.value : '';
+    const provider = this._remapProviders.length > 0 ? this._remapProviders[0].id : '';
+
+    let findings = [];
+    try { findings = JSON.parse(btn.dataset.findings || '[]'); } catch (e) { findings = []; }
+
+    btn.disabled = true;
+    btn.textContent = 'Rewriting...';
+
+    try {
+      const resp = await fetch('/api/candidates/rewrite-skill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          skill_name: skillName,
+          rewriter_model: model,
+          rewriter_provider: provider,
+          findings,
+        }),
+      });
+      const data = await resp.json();
+
+      if (data.status === 'success') {
+        btn.textContent = '✅ Rewritten';
+        const skillEl = btn.closest('.remap-audit-skill');
+        if (skillEl) {
+          skillEl.classList.remove('flagged');
+          skillEl.classList.add('clean');
+          const statusEl = skillEl.querySelector('.remap-audit-skill-status');
+          if (statusEl) statusEl.textContent = '✅ Rewritten';
+        }
+      } else {
+        btn.textContent = '❌ Failed';
+        btn.disabled = false;
+        this.logEntry('SYSTEM', `Skill rewrite failed: ${data.error || 'unknown'}`, 'system');
+      }
+    } catch (err) {
+      btn.textContent = '❌ Error';
+      btn.disabled = false;
+      this.logEntry('SYSTEM', `Skill rewrite error: ${err.message}`, 'system');
+    }
   }
 
   _showOnboardingProgress(selections) {
