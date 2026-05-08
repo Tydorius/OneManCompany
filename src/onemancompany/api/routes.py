@@ -4928,11 +4928,26 @@ async def batch_hire_candidates(body: dict) -> dict:
     # --- Talent Market purchase (must complete before background work) ---
     from onemancompany.agents.recruitment import talent_market
     session_id = _pending_project_ctx.get(batch_id, {}).get("session_id", "")
-    talent_ids = [s.get("candidate_id", "") for s in selections]
 
-    if talent_market.connected and talent_ids:
+    # Build candidate lookup to determine source (local vs cloud)
+    cand_by_id = {}
+    for c in all_candidates:
+        cid = c.get("id") or c.get("talent_id") or ""
+        if cid:
+            cand_by_id[cid] = c
+
+    # Only send cloud-sourced talents to the external market for purchase.
+    # Local talents are already on disk and don't need purchasing.
+    cloud_talent_ids = []
+    for sel in selections:
+        cid = sel.get("candidate_id", "")
+        c = cand_by_id.get(cid)
+        if c and c.get("source") != "local":
+            cloud_talent_ids.append(cid)
+
+    if talent_market.connected and cloud_talent_ids:
         try:
-            purchase_result = await talent_market.hire(talent_ids, session_id=session_id)
+            purchase_result = await talent_market.hire(cloud_talent_ids, session_id=session_id)
             if purchase_result.get("error"):
                 return {
                     "error": purchase_result.get("error", "Purchase failed"),
@@ -4944,7 +4959,7 @@ async def batch_hire_candidates(body: dict) -> dict:
             logger.error("Talent Market purchase failed: {}", e)
             return {"error": f"Purchase failed: {e}"}
 
-        # Clone talents concurrently
+        # Clone cloud talents concurrently
         from onemancompany.agents.onboarding import clone_talent_repo
 
         async def _onboard_one(tid):
@@ -4956,7 +4971,7 @@ async def batch_hire_candidates(body: dict) -> dict:
             except Exception as e:
                 logger.error("Failed to onboard/clone talent {}: {}", tid, e)
 
-        await asyncio.gather(*[_onboard_one(tid) for tid in talent_ids])
+        await asyncio.gather(*[_onboard_one(tid) for tid in cloud_talent_ids])
 
     # Collect COO contexts for all selections
     coo_ctxs = []
@@ -7060,9 +7075,11 @@ async def list_conversations(type: str | None = None, phase: str | None = None) 
     return {"conversations": [c.to_dict() for c in convs]}
 
 
-def _format_llm_error(exc: Exception) -> str:
+def _format_llm_error(exc: Exception, employee_id: str = "", model_name: str = "") -> str:
     """Convert LLM API exceptions into friendly CEO-facing error messages."""
     msg = str(exc).lower()
+    exc_type = type(exc).__name__
+    context = f" (employee: {employee_id}, model: {model_name})" if employee_id or model_name else ""
     if "insufficient balance" in msg or "exceeded_current_quota" in msg or "quota" in msg:
         return "LLM API quota exceeded or insufficient balance. Please check your billing at your provider's dashboard."
     if "401" in msg or "authentication" in msg or "invalid" in msg and "key" in msg:
@@ -7073,7 +7090,11 @@ def _format_llm_error(exc: Exception) -> str:
         return "LLM API request timed out. The model may be overloaded, please try again."
     if "connection" in msg or "network" in msg:
         return "Could not connect to LLM API. Please check your network and API settings."
-    return f"Agent error: {type(exc).__name__}: {str(exc)[:200]}"
+    if "unable to start process" in msg or "upstream command exited" in msg or exc_type == "InternalServerError":
+        model_hint = f" The model '{model_name}' may be misconfigured or unavailable." if model_name else ""
+        return (f"LLM backend error{context}: the model process failed to start.{model_hint} "
+                "Check your LLM backend (e.g., llama-swap, Ollama) logs for details.")
+    return f"Agent error: {exc_type}: {str(exc)[:200]}"
 
 
 async def _dispatch_conversation_to_adapter(conv_id: str, ceo_message: Message) -> None:
@@ -7119,8 +7140,11 @@ async def _dispatch_conversation_to_adapter(conv_id: str, ceo_message: Message) 
         )
     except Exception as exc:
         logger.exception("[conversation] adapter dispatch failed for {}", conv_id)
-        # Surface a friendly error message to the CEO console
-        error_text = _format_llm_error(exc)
+        emp_model = ""
+        if conv:
+            emp_data = _store.load_employee(conv.employee_id)
+            emp_model = (emp_data or {}).get("llm_model", "")
+        error_text = _format_llm_error(exc, employee_id=conv.employee_id if conv else "", model_name=emp_model)
         try:
             await _get_conv_svc().send_message(
                 conv_id, sender=SYSTEM_SENDER, role="System",
