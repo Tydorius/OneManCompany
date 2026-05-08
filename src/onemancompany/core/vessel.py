@@ -301,12 +301,12 @@ def build_role_identity(employee_id: str) -> str:
 # Distance-based tree context builder
 # ---------------------------------------------------------------------------
 
-def _build_tree_context(tree, node, project_dir: str) -> str:
+def _build_tree_context(tree, node, project_dir: str, max_child_result_chars: int = 3000) -> str:
     """Build distance-based tree context for an employee.
 
     - Current node + parent: full content (load_content)
     - Grandparent+: skeleton only (id + status + preview)
-    - Children needing review: full result
+    - Children needing review: full result (truncated per max_child_result_chars)
     - Accepted children: skeleton only
     """
     parts: list[str] = []
@@ -362,7 +362,10 @@ def _build_tree_context(tree, node, project_dir: str) -> str:
             if child.is_ceo_node and child.is_done_executing:
                 child.load_content(project_dir)
                 if child.result:
-                    parts.append(f"  [CEO REPLY] {child.id}: {child.result}")
+                    _r = child.result
+                    if len(_r) > max_child_result_chars:
+                        _r = _r[:max_child_result_chars] + "\n  [... result truncated ...]"
+                    parts.append(f"  [CEO REPLY] {child.id}: {_r}")
                 continue
             if child.is_ceo_node:
                 continue
@@ -371,7 +374,10 @@ def _build_tree_context(tree, node, project_dir: str) -> str:
             elif child.is_done_executing:
                 child.load_content(project_dir)
                 parts.append(f"  [{child.status.upper()}] {child.id} ({child.employee_id}): {child.description}")
-                parts.append(f"    Result: {child.result}")
+                _cr = child.result or ""
+                if len(_cr) > max_child_result_chars:
+                    _cr = _cr[:max_child_result_chars] + "\n    [... result truncated ...]"
+                parts.append(f"    Result: {_cr}")
             else:
                 parts.append(f"  [{child.status.upper()}] {child.id} ({child.employee_id}): {child.description_preview}")
         parts.append("")
@@ -1454,7 +1460,8 @@ class EmployeeManager:
                 task_with_ctx = node.description
             else:
                 # Tree context includes current node description + ancestors + children
-                tree_ctx = _build_tree_context(tree, node, _effective_dir)
+                # Budget child results to ~3k chars each to prevent context bloat
+                tree_ctx = _build_tree_context(tree, node, _effective_dir, max_child_result_chars=3000)
                 task_with_ctx = tree_ctx if tree_ctx else node.description
 
                 # Inject dependency context if this node has depends_on
@@ -1563,7 +1570,11 @@ class EmployeeManager:
                 logger.warning("Task start hooks failed for {}", employee_id)
 
             # --- Truncate oversized prompts to avoid context-limit errors ---
-            MAX_PROMPT_CHARS = 100_000  # ~25K tokens, safe for most models
+            from onemancompany.core.model_router import get_context_window
+            _ctx_tokens = get_context_window(employee_id)
+            # 60% of context window for task prompt, ~4 chars/token
+            MAX_PROMPT_CHARS = int(_ctx_tokens * 4 * 0.6)
+            logger.debug("[TASK] Context budget for employee={}: {} tokens → {} prompt chars", employee_id, _ctx_tokens, MAX_PROMPT_CHARS)
             if len(task_with_ctx) > MAX_PROMPT_CHARS:
                 logger.warning(
                     "[TASK] Truncating oversized prompt for employee={} node={}: {} → {} chars",

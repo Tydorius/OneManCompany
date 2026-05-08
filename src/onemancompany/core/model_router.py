@@ -113,3 +113,29 @@ def get_effective_model(employee_id: str) -> tuple[str, str, float]:
             model, provider = cb_resolution
 
     return (model, provider, temperature)
+
+
+def get_context_window(employee_id: str) -> int:
+    """Return the context window size (tokens) for the employee's effective model.
+
+    Resolution order:
+    1. Cognitive budget profile's context_window (matching by hint, then role)
+    2. Default 128000
+
+    Used by vessel.py and base.py to truncate prompts and manage message budgets.
+    """
+    cb = load_cognitive_budget()
+    if cb.enabled:
+        cfg = employee_configs.get(employee_id)
+        if cfg:
+            if cfg.model_profile_hint:
+                profile = cb.model_profiles.get(cfg.model_profile_hint)
+                if profile and profile.context_window:
+                    return profile.context_window
+            for _name, profile in cb.model_profiles.items():
+                if cfg.role in profile.roles and profile.context_window:
+                    return profile.context_window
+        general = cb.model_profiles.get("general")
+        if general and general.context_window:
+            return general.context_window
+    return 128000

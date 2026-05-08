@@ -643,6 +643,20 @@ class BaseAgentRunner:
         await self._publish("agent_thinking", {"message": f"{self.role} analyzing: {task}"})
 
         prompt = self._build_full_prompt()
+
+        # Cap system prompt to stay within context budget
+        from onemancompany.core.model_router import get_context_window
+        _ctx_tokens = get_context_window(self.employee_id)
+        # Reserve 25% of context window for system prompt (~4 chars/token)
+        _max_sys_chars = int(_ctx_tokens * 4 * 0.25)
+        if len(prompt) > _max_sys_chars:
+            logger.warning(
+                "[CONTEXT] Truncating system prompt for employee={}: {} → {} chars (context_window={} tokens)",
+                self.employee_id, len(prompt), _max_sys_chars, _ctx_tokens,
+            )
+            _head = _max_sys_chars // 2
+            prompt = prompt[:_head] + "\n\n[... system prompt truncated to fit context budget ...]\n\n" + prompt[-_head:]
+
         messages_input = {
             "messages": [
                 SystemMessage(content=prompt),
