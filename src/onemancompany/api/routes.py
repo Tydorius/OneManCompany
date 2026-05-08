@@ -1321,12 +1321,16 @@ async def update_workflow(name: str, body: dict):
 
 
 @router.get("/api/models")
-async def list_available_models(provider: str = "openrouter") -> dict:
-    """Fetch available models for a provider (default: openrouter).
+async def list_available_models(provider: str = "") -> dict:
+    """Fetch available models for a provider.
 
+    Defaults to the company's configured default_api_provider.
     When cognitive budgeting is enabled, model profiles are prepended
     to the list so they appear as selectable options in the UI dropdown.
     """
+    if not provider:
+        from onemancompany.core.config import settings
+        provider = settings.default_api_provider or "openrouter"
     result = await _fetch_provider_models(provider)
 
     from onemancompany.core.config import load_cognitive_budget
@@ -1354,9 +1358,18 @@ async def _fetch_provider_models(provider: str) -> dict:
     if not prov_cfg:
         return {"models": [], "error": f"Unknown provider '{provider}'"}
 
-    # Determine models URL: custom base_url → registry base_url → health_url
+    # Determine models URL: custom base_url → CB base_url → registry base_url → health_url
+    cb_base_url = ""
+    if provider == "custom":
+        from onemancompany.core.config import load_cognitive_budget
+        cb = load_cognitive_budget()
+        if cb and cb.base_url:
+            cb_base_url = cb.base_url
+
     if provider == "custom" and settings.default_api_base_url:
         models_url = f"{settings.default_api_base_url.rstrip('/')}/models"
+    elif provider == "custom" and cb_base_url:
+        models_url = f"{cb_base_url.rstrip('/')}/models"
     elif prov_cfg.base_url:
         models_url = f"{prov_cfg.base_url.rstrip('/')}/models"
     elif prov_cfg.health_url and "/models" in prov_cfg.health_url:
@@ -1364,8 +1377,13 @@ async def _fetch_provider_models(provider: str) -> dict:
     else:
         return {"models": [], "error": f"No models endpoint for '{provider}'"}
 
-    # Get API key
+    # Get API key: provider-specific → cognitive budget fallback
     api_key = getattr(settings, prov_cfg.env_key, "") if prov_cfg.env_key else ""
+    if not api_key:
+        from onemancompany.core.config import load_cognitive_budget
+        cb = load_cognitive_budget()
+        if cb and cb.api_key:
+            api_key = cb.api_key
     if not api_key:
         return {"models": [], "error": "No API key configured"}
 

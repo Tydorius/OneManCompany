@@ -3263,8 +3263,8 @@ class AppController {
       select.dataset.fieldType = 'select';
       select.innerHTML = '<option value="">Loading...</option>';
       row.appendChild(select);
-      // Async load models
-      this._populateModelSelect(select, currentValue);
+      // Async load models (pass employee's provider so /api/models queries the right endpoint)
+      this._populateModelSelect(select, currentValue, empData.api_provider);
     } else if (field.type === 'select') {
       const select = document.createElement('select');
       select.className = 'emp-model-select';
@@ -3345,9 +3345,10 @@ class AppController {
     return row;
   }
 
-  async _populateModelSelect(select, currentModel) {
+  async _populateModelSelect(select, currentModel, provider) {
+    const providerParam = provider ? `?provider=${encodeURIComponent(provider)}` : '';
     try {
-      const modelsResp = await fetch('/api/models').then(r => r.json());
+      const modelsResp = await fetch(`/api/models${providerParam}`).then(r => r.json());
       const models = modelsResp.models || [];
       select.innerHTML = '<option value="">-- Use default --</option>';
       let inCBGroup = false;
@@ -3632,7 +3633,9 @@ class AppController {
 
     try {
       const empResp = empData || await fetch(`/api/employee/${empId}`).then(r => r.json());
-      const modelsResp = await fetch('/api/models').then(r => r.json());
+      const provider = empResp.api_provider || '';
+      const providerParam = provider ? `?provider=${encodeURIComponent(provider)}` : '';
+      const modelsResp = await fetch(`/api/models${providerParam}`).then(r => r.json());
 
       const currentModel = empResp.llm_model || '';
       const models = modelsResp.models || [];
