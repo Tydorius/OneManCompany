@@ -236,8 +236,62 @@ _ORG_DIR_DESCRIPTIONS: dict["OrgDir", str] = {
 # Talent market — built-in talents (source-relative), cloned talents (runtime), user talents
 TALENT_MARKET_DIR = Path(__file__).parent.parent / "talent_market"
 TALENTS_DIR = TALENT_MARKET_DIR / "talents"  # built-in (general-assistant, etc.)
-TALENTS_RUNTIME_DIR = DATA_ROOT / "talent_market" / "talents"  # cloned from market
+TALENTS_RUNTIME_DIR = DATA_ROOT / "talent_market" / "talents"  # cloned from market / NFS-mounted
 USER_TALENTS_DIR = DATA_ROOT / "company" / "assets" / "talents"  # user-created talents
+
+# Default skills (source package)
+DEFAULT_SKILLS_DIR = Path(__file__).parent.parent / "default_skills"
+DEFAULT_SKILLS_RUNTIME_DIR = DATA_ROOT / "default_skills"  # NFS-mounted
+
+
+def seed_builtin_assets() -> dict[str, int]:
+    """Seed built-in talents and skills into the runtime (NFS-mounted) directories.
+
+    Called at startup. If the runtime directories are empty (first run after
+    adding volume mounts, or upgrade from a version without mounts), copies
+    all built-in packages from the image. Existing files are never overwritten.
+
+    Returns a dict with counts of seeded packages, e.g. {"talents": 12, "skills": 5}.
+    """
+    import shutil
+
+    result: dict[str, int] = {}
+
+    # Seed talents: built-in -> runtime (NFS mount)
+    if TALENTS_DIR.exists():
+        TALENTS_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        seeded = 0
+        for src_pkg in sorted(TALENTS_DIR.iterdir()):
+            if not src_pkg.is_dir() or src_pkg.name.startswith(("_", ".")):
+                continue
+            dst_pkg = TALENTS_RUNTIME_DIR / src_pkg.name
+            if dst_pkg.exists():
+                continue
+            shutil.copytree(str(src_pkg), str(dst_pkg), symlinks=True)
+            logger.info("[seed] Copied built-in talent: {}", src_pkg.name)
+            seeded += 1
+        if seeded:
+            logger.info("[seed] Seeded {} built-in talent(s) into {}", seeded, TALENTS_RUNTIME_DIR)
+        result["talents"] = seeded
+
+    # Seed default skills: built-in -> runtime (NFS mount)
+    if DEFAULT_SKILLS_DIR.exists():
+        DEFAULT_SKILLS_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        seeded = 0
+        for src_skill in sorted(DEFAULT_SKILLS_DIR.iterdir()):
+            if not src_skill.is_dir() or src_skill.name.startswith(("_", ".")):
+                continue
+            dst_skill = DEFAULT_SKILLS_RUNTIME_DIR / src_skill.name
+            if dst_skill.exists():
+                continue
+            shutil.copytree(str(src_skill), str(dst_skill), symlinks=True)
+            logger.info("[seed] Copied built-in skill: {}", src_skill.name)
+            seeded += 1
+        if seeded:
+            logger.info("[seed] Seeded {} built-in skill(s) into {}", seeded, DEFAULT_SKILLS_RUNTIME_DIR)
+        result["skills"] = seeded
+
+    return result
 
 # ---------------------------------------------------------------------------
 # Founding member IDs (permanent employee numbers)

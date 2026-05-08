@@ -26,6 +26,15 @@ services:
       - /nfs/dockernfs/one-man-company/config:/app/.onemancompany
 
       # ──────────────────────────────────────────────────────────────────────
+      # PERSISTENT TALENTS & SKILLS (recommended — survives image upgrades)
+      # Built-in talents and skills are auto-seeded into these directories
+      # on first start. Users can then add/edit/remove packages via NFS
+      # without rebuilding the Docker image.
+      # ──────────────────────────────────────────────────────────────────────
+      - /nfs/dockernfs/one-man-company/talents:/app/.onemancompany/talent_market/talents
+      - /nfs/dockernfs/one-man-company/skills:/app/.onemancompany/default_skills
+
+      # ──────────────────────────────────────────────────────────────────────
       # OPTIONAL: Shared workspace for agent file output
       # Agents write project files under .onemancompany/company/business/
       # by default. Only mount this if you have tooling that reads /app/workspace.

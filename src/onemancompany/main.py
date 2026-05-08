@@ -426,6 +426,12 @@ async def lifespan(app: FastAPI):
     # Bootstrap data directory on first run
     _bootstrap_data_dir()
 
+    # Seed built-in talents/skills into NFS-mounted runtime dirs if empty
+    from onemancompany.core.config import seed_builtin_assets
+    _seeded = seed_builtin_assets()
+    if _seeded:
+        logger.info("[startup] Seeded built-in assets: {}", _seeded)
+
     # Repair missing founder manifests (copied from package template)
     from onemancompany.core.config import repair_founder_manifests
     repair_founder_manifests()
