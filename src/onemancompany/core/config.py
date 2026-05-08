@@ -1053,6 +1053,35 @@ def invalidate_manifest_cache(employee_id: str | None = None) -> None:
         MANIFEST_CACHE.pop(employee_id, None)
 
 
+def repair_founder_manifests() -> int:
+    """Copy missing manifest.json from package template to runtime employees.
+
+    Returns the number of manifests repaired.
+    """
+    import shutil
+
+    pkg_dir = Path(__file__).resolve().parent.parent.parent.parent / "company"
+    if not pkg_dir.exists():
+        logger.debug("repair_founder_manifests: no package company/ dir at {}", pkg_dir)
+        return 0
+
+    repaired = 0
+    for fid in FOUNDING_IDS:
+        dst = EMPLOYEES_DIR / fid / MANIFEST_FILENAME
+        if dst.exists():
+            continue
+        src = pkg_dir / "human_resource" / "employees" / fid / MANIFEST_FILENAME
+        if not src.exists():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(src), str(dst))
+        repaired += 1
+        logger.debug("repair_founder_manifests: copied manifest for {}", fid)
+    if repaired:
+        logger.info("repair_founder_manifests: repaired {} manifests", repaired)
+    return repaired
+
+
 def load_custom_settings(employee_id: str) -> dict:
     """Load custom settings (target_email, polling_interval, etc.) from settings.json."""
     path = EMPLOYEES_DIR / employee_id / "settings.json"

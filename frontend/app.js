@@ -3350,7 +3350,15 @@ class AppController {
       const modelsResp = await fetch('/api/models').then(r => r.json());
       const models = modelsResp.models || [];
       select.innerHTML = '<option value="">-- Use default --</option>';
+      let inCBGroup = false;
       for (const m of models) {
+        if (m.name && m.name.startsWith('[CB]') && !inCBGroup) {
+          const sep = document.createElement('option');
+          sep.disabled = true;
+          sep.textContent = '── Cognitive Budget ──';
+          select.appendChild(sep);
+          inCBGroup = true;
+        }
         const opt = document.createElement('option');
         opt.value = m.id;
         opt.textContent = m.name || m.id;

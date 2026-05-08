@@ -426,6 +426,10 @@ async def lifespan(app: FastAPI):
     # Bootstrap data directory on first run
     _bootstrap_data_dir()
 
+    # Repair missing founder manifests (copied from package template)
+    from onemancompany.core.config import repair_founder_manifests
+    repair_founder_manifests()
+
     # Eagerly load assets (tools, meeting rooms) into company_state
     from onemancompany.agents.coo_agent import _load_assets_from_disk
     _load_assets_from_disk()

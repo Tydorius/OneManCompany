@@ -1322,8 +1322,26 @@ async def update_workflow(name: str, body: dict):
 
 @router.get("/api/models")
 async def list_available_models(provider: str = "openrouter") -> dict:
-    """Fetch available models for a provider (default: openrouter)."""
-    return await _fetch_provider_models(provider)
+    """Fetch available models for a provider (default: openrouter).
+
+    When cognitive budgeting is enabled, model profiles are prepended
+    to the list so they appear as selectable options in the UI dropdown.
+    """
+    result = await _fetch_provider_models(provider)
+
+    from onemancompany.core.config import load_cognitive_budget
+
+    cb = load_cognitive_budget()
+    if cb and cb.enabled and cb.model_profiles:
+        cb_models = []
+        for name, profile in cb.model_profiles.items():
+            cb_models.append({
+                "id": name,
+                "name": f"[CB] {getattr(profile, 'description', None) or name}",
+            })
+        result["models"] = cb_models + result.get("models", [])
+
+    return result
 
 
 async def _fetch_provider_models(provider: str) -> dict:
