@@ -4588,7 +4588,8 @@ class AppController {
       progressDiv.querySelector('.remap-audit-progress-text').textContent = 'Auditing skills...';
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300000);
+      const timeoutMs = Math.max(300000, candidateIds.length * 13 * 90000);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       const resp = await fetch('/api/candidates/audit-skills', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
