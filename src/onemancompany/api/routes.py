@@ -1465,13 +1465,15 @@ def _skill_content_hash(content: str) -> str:
 
 def _audit_cache_dir() -> Path:
     try:
-        from onemancompany.core.config import settings as _s
-        d = Path(_s.company_dir) / ".audit_cache"
+        from onemancompany.core.config import DATA_ROOT
+        d = DATA_ROOT / ".audit_cache"
         d.mkdir(parents=True, exist_ok=True)
         return d
     except Exception as e:
         logger.warning("[audit-cache] Cannot create cache dir: {}", e)
-        return Path.cwd() / ".audit_cache_fallback"
+        d = Path.cwd() / ".audit_cache_fallback"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
 
 def _cache_safe_name(skill_name: str) -> str:
