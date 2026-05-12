@@ -171,11 +171,17 @@ def make_llm(employee_id: str = "", temperature: float | None = None) -> BaseCha
     if temperature is not None:
         effective_temp = temperature
 
+    # --- Endpoint unlocked: skip cognitive budget, use employee's explicit provider ---
+    endpoint_unlocked = False
+    if employee_id and employee_id in employee_configs:
+        cfg = employee_configs[employee_id]
+        endpoint_unlocked = cfg.endpoint_unlocked
+
     # --- Cognitive budget resolution ---
     # If employee has no explicit model, try cognitive budget mapping
     cb_base_url = ""
     cb_api_key = ""
-    if employee_id and employee_id in employee_configs:
+    if employee_id and employee_id in employee_configs and not endpoint_unlocked:
         cfg = employee_configs[employee_id]
         if not cfg.llm_model:
             from onemancompany.core.model_router import resolve_model_for_employee

@@ -1707,6 +1707,7 @@ async def get_employee_detail(employee_id: str) -> dict:
     else:
         result["oauth_logged_in"] = bool(cfg.api_key) if cfg and cfg.auth_method == AuthMethod.OAUTH else False
     result["tool_permissions"] = list(cfg.tool_permissions) if cfg and cfg.tool_permissions else []
+    result["endpoint_unlocked"] = cfg.endpoint_unlocked if cfg else False
 
     # Include manifest if available
     manifest = load_manifest(employee_id)
@@ -2157,7 +2158,10 @@ async def update_employee_custom_settings(employee_id: str, body: dict) -> dict:
 
 @router.put("/api/employee/{employee_id}/model")
 async def update_employee_model(employee_id: str, body: dict) -> dict:
-    """Update the LLM model for a specific employee. Saves to profile.yaml."""
+    """Update the LLM model, api_provider, and endpoint_unlocked for a specific employee.
+
+    Saves to profile.yaml and rebuilds the in-memory agent immediately.
+    """
     import yaml
 
     from onemancompany.core.config import EMPLOYEES_DIR, employee_configs, settings as _cfg_settings
@@ -2172,7 +2176,7 @@ async def update_employee_model(employee_id: str, body: dict) -> dict:
     cfg = employee_configs.get(employee_id)
     hosting = cfg.hosting if cfg else emp.get("hosting", "company")
     _default_prov = _cfg_settings.default_api_provider or "openrouter"
-    api_provider = cfg.api_provider if cfg else _default_prov
+    api_provider = body.get("api_provider", "") or (cfg.api_provider if cfg else _default_prov)
     if hosting == "self" or api_provider != _default_prov:
         new_salary = cfg.salary_per_1m_tokens if cfg else 0.0
     else:
@@ -2183,9 +2187,20 @@ async def update_employee_model(employee_id: str, body: dict) -> dict:
     if cfg:
         cfg.llm_model = model_id
         cfg.salary_per_1m_tokens = new_salary
+        cfg.api_provider = api_provider
+
+    # Build updates dict for persistence
+    updates: dict = {"llm_model": model_id, "salary_per_1m_tokens": new_salary, "api_provider": api_provider}
+
+    # Handle endpoint_unlocked toggle
+    if "endpoint_unlocked" in body:
+        unlocked = bool(body["endpoint_unlocked"])
+        if cfg:
+            cfg.endpoint_unlocked = unlocked
+        updates["endpoint_unlocked"] = unlocked
 
     # Persist via store
-    await _store.save_employee(employee_id, {"llm_model": model_id, "salary_per_1m_tokens": new_salary})
+    await _store.save_employee(employee_id, updates)
 
     # Rebuild the in-memory LLM agent so the new model takes effect immediately
     _rebuild_employee_agent(employee_id)
@@ -5342,17 +5357,30 @@ async def _do_batch_hire(
 
             # Apply hosting remap if the user requested it
             remap_hosting = sel.get("remap_hosting")
+            remap_provider = sel.get("remap_api_provider")
+            remap_model = sel.get("remap_llm_model")
             original_hosting = talent_data.get("hosting", "")
+
             if remap_hosting and original_hosting in ("self", HostingMode.SELF.value):
+                # Self-hosted → company: full remap including hosting
                 talent_data["hosting"] = remap_hosting
-                talent_data["api_provider"] = sel.get("remap_api_provider", settings.default_api_provider)
-                talent_data["llm_model"] = sel.get("remap_llm_model", settings.default_llm_model)
+                talent_data["api_provider"] = remap_provider or settings.default_api_provider
+                talent_data["llm_model"] = remap_model or settings.default_llm_model
                 talent_data["auth_method"] = "api_key"
                 talent_data.pop("claude_plugins", None)
                 logger.info("[batch-hire] Remapping {}: hosting:{} → hosting:{}, provider:{} → provider:{}, model:{}",
                             candidate_id, original_hosting, remap_hosting,
                             original_hosting, talent_data["api_provider"], talent_data["llm_model"])
                 _fill_talent_defaults(talent_data)
+            elif remap_provider or remap_model:
+                # Provider-locked talent → different provider (e.g. anthropic → custom)
+                if remap_provider:
+                    talent_data["api_provider"] = remap_provider
+                if remap_model:
+                    talent_data["llm_model"] = remap_model
+                talent_data["endpoint_unlocked"] = True
+                logger.info("[batch-hire] Provider remapping {}: provider → {}, model → {}",
+                            candidate_id, talent_data["api_provider"], talent_data["llm_model"])
 
             # Validate required fields
             missing = _check_talent_required_fields(talent_data)

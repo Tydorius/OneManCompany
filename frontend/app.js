@@ -140,6 +140,11 @@ class AppController {
 
       // Lazy-load full task tree summaries in background (non-blocking)
       this._lazyLoadTaskTrees();
+
+      // Pre-fetch company default provider for hiring flow (non-blocking)
+      fetch('/api/settings/api').then(r => r.json()).then(s => {
+        this._companyDefaultProvider = s.default_provider || 'openrouter';
+      }).catch(() => {});
     } catch (e) {
       console.error('Bootstrap failed:', e);
     }
@@ -3416,12 +3421,17 @@ class AppController {
           this.logEntry('SYSTEM', `Agent family switched to "${payload.hosting}". Active immediately.`, 'system');
         }
       }
-      // Save model + temperature via model endpoint
-      if ('llm_model' in payload) {
+      // Save model + temperature + api_provider + endpoint_unlocked via model endpoint
+      if ('llm_model' in payload || 'endpoint_unlocked' in payload) {
+        const modelPayload = {};
+        if (payload.llm_model) modelPayload.model = payload.llm_model;
+        if (payload.temperature !== undefined) modelPayload.temperature = payload.temperature;
+        if (payload.api_provider) modelPayload.api_provider = payload.api_provider;
+        if ('endpoint_unlocked' in payload) modelPayload.endpoint_unlocked = payload.endpoint_unlocked;
         await fetch(`/api/employee/${empId}/model`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: payload.llm_model, temperature: payload.temperature }),
+          body: JSON.stringify(modelPayload),
         });
       }
       // Save API key via api-key endpoint
@@ -3433,7 +3443,7 @@ class AppController {
         });
       }
       // Save custom settings (target_email, polling_interval, etc.) via generic endpoint
-      const reserved = new Set(['hosting', 'llm_model', 'temperature', 'api_key', 'api_provider']);
+      const reserved = new Set(['hosting', 'llm_model', 'temperature', 'api_key', 'api_provider', 'endpoint_unlocked']);
       const customPayload = {};
       for (const [k, v] of Object.entries(payload)) {
         if (!reserved.has(k)) customPayload[k] = v;
@@ -3516,6 +3526,8 @@ class AppController {
       { id: 'sonnet', label: 'Claude Sonnet' },
     ];
 
+    const isUnlocked = empData.endpoint_unlocked || false;
+
     const section = document.createElement('div');
     section.className = 'emp-detail-section-content';
     section.style.cssText = 'display:flex;flex-direction:column;gap:3px;';
@@ -3535,9 +3547,63 @@ class AppController {
         <span style="font-size:6px;color:${statusColor};">${statusText}</span>
       </div>
       ${sessions.length > 0 ? `<div style="font-size:5px;color:var(--text-dim);margin-top:2px;">${sessions.length} session(s)</div>` : ''}
+      <div style="display:flex;align-items:center;gap:4px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.1);padding-top:4px;">
+        <input type="checkbox" id="emp-endpoint-unlocked" ${isUnlocked ? 'checked' : ''} style="margin:0;">
+        <label for="emp-endpoint-unlocked" style="font-size:6px;color:var(--pixel-cyan);cursor:pointer;">Unlocked — override to use a different provider/model</label>
+      </div>
+      <div id="emp-unlocked-fields" style="display:${isUnlocked ? 'flex' : 'none'};flex-direction:column;gap:3px;margin-top:2px;">
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:6px;color:var(--pixel-yellow);min-width:55px;">Provider</span>
+          <select id="emp-detail-provider" class="emp-model-select" style="flex:1;"><option value="">Loading...</option></select>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:6px;color:var(--pixel-yellow);min-width:55px;">Model</span>
+          <select id="emp-detail-model" class="emp-model-select" style="flex:1;"><option value="">Loading...</option></select>
+        </div>
+        <div style="display:flex;gap:4px;justify-content:flex-end;">
+          <button id="emp-unlocked-save-btn" class="pixel-btn small" disabled>Save Override</button>
+        </div>
+      </div>
     `;
     container.appendChild(section);
 
+    // Toggle unlocked fields visibility
+    const unlockCheckbox = section.querySelector('#emp-endpoint-unlocked');
+    const unlockedFields = section.querySelector('#emp-unlocked-fields');
+    unlockCheckbox.addEventListener('change', () => {
+      unlockedFields.style.display = unlockCheckbox.checked ? 'flex' : 'none';
+      if (unlockCheckbox.checked) {
+        // Populate provider dropdown
+        fetch('/api/auth/providers')
+          .then(r => r.json())
+          .then(groups => {
+            const providerSelect = section.querySelector('#emp-detail-provider');
+            if (!providerSelect) return;
+            const currentProv = empData.api_provider || 'openrouter';
+            providerSelect.innerHTML = groups
+              .map(g => `<option value="${g.group_id}"${g.group_id === currentProv ? ' selected' : ''}>${g.label}</option>`)
+              .join('');
+          });
+        this._loadModelDropdown(empId, empData);
+      }
+    });
+
+    // If already unlocked, populate immediately
+    if (isUnlocked) {
+      fetch('/api/auth/providers')
+        .then(r => r.json())
+        .then(groups => {
+          const providerSelect = section.querySelector('#emp-detail-provider');
+          if (!providerSelect) return;
+          const currentProv = empData.api_provider || 'openrouter';
+          providerSelect.innerHTML = groups
+            .map(g => `<option value="${g.group_id}"${g.group_id === currentProv ? ' selected' : ''}>${g.label}</option>`)
+            .join('');
+        });
+      this._loadModelDropdown(empId, empData);
+    }
+
+    // Self-hosted model change (original Claude model dropdown)
     const modelSelect = section.querySelector('#emp-self-hosted-model');
     modelSelect.addEventListener('change', async () => {
       const newModel = modelSelect.value;
@@ -3555,10 +3621,59 @@ class AppController {
         modelSelect.disabled = false;
       }
     });
+
+    // Unlocked save button
+    const unlockedSaveBtn = section.querySelector('#emp-unlocked-save-btn');
+    if (unlockedSaveBtn) {
+      unlockedSaveBtn.addEventListener('click', async () => {
+        const providerSelect = section.querySelector('#emp-detail-provider');
+        const modelSelectEl = section.querySelector('#emp-detail-model');
+        const provider = providerSelect ? providerSelect.value : 'openrouter';
+        const model = modelSelectEl ? modelSelectEl.value : '';
+
+        if (!model) {
+          this.logEntry('SYSTEM', 'Select a model first', 'system');
+          return;
+        }
+
+        unlockedSaveBtn.disabled = true;
+        unlockedSaveBtn.textContent = 'Saving...';
+
+        try {
+          // When unlocking a self-hosted employee, also switch hosting to company
+          const unlockCheckbox = section.querySelector('#emp-endpoint-unlocked');
+          if (unlockCheckbox && unlockCheckbox.checked) {
+            await fetch(`/api/employee/${empId}/hosting`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ hosting: 'company' }),
+            });
+          }
+          const resp = await fetch(`/api/employee/${empId}/model`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, api_provider: provider, endpoint_unlocked: true }),
+          });
+          const data = await resp.json();
+          if (data.error) {
+            this.logEntry('SYSTEM', `Save failed: ${data.error}`, 'system');
+          } else {
+            this.logEntry('CEO', `Saved ${model} (${provider}) [UNLOCKED] for employee #${empId}`, 'ceo');
+            await this._loadModelOrApiKeySection(empId);
+          }
+        } catch (err) {
+          this.logEntry('SYSTEM', `Save failed: ${err.message}`, 'system');
+        } finally {
+          unlockedSaveBtn.disabled = false;
+          unlockedSaveBtn.textContent = 'Save Override';
+        }
+      });
+    }
   }
 
   _renderFallbackModelSection(empId, empData, container) {
     const currentProvider = empData.api_provider || 'openrouter';
+    const isUnlocked = empData.endpoint_unlocked || false;
     const section = document.createElement('div');
     section.className = 'emp-detail-section-content emp-model-section';
     section.style.cssText = 'display:flex;flex-direction:column;gap:3px;';
@@ -3572,6 +3687,10 @@ class AppController {
       <div style="display:flex;align-items:center;gap:4px;">
         <span style="font-size:6px;color:var(--pixel-yellow);min-width:45px;">Model</span>
         <select id="emp-detail-model" class="emp-model-select" style="flex:1;"><option value="">Loading...</option></select>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" id="emp-endpoint-unlocked" ${isUnlocked ? 'checked' : ''} style="margin:0;">
+        <label for="emp-endpoint-unlocked" style="font-size:6px;color:var(--pixel-cyan);cursor:pointer;">Unlocked — override talent's default endpoint</label>
       </div>
       <div style="display:flex;gap:4px;justify-content:flex-end;">
         <button id="emp-model-save-btn" class="pixel-btn small" disabled>Save</button>
@@ -3590,44 +3709,54 @@ class AppController {
           .join('');
       });
 
-    // Provider change handler
+    // Provider change → reload model dropdown
     document.getElementById('emp-detail-provider').addEventListener('change', async (e) => {
       const provider = e.target.value;
+      const updatedEmpData = { ...empData, api_provider: provider };
+      this._loadModelDropdown(empId, updatedEmpData);
+    });
+
+    this._loadModelDropdown(empId, empData);
+
+    // Wire save button
+    document.getElementById('emp-model-save-btn').addEventListener('click', async () => {
       const saveBtn = document.getElementById('emp-model-save-btn');
+      const modelSelect = document.getElementById('emp-detail-model');
+      const providerSelect = document.getElementById('emp-detail-provider');
+      const unlockedCheckbox = document.getElementById('emp-endpoint-unlocked');
+      const model = modelSelect ? modelSelect.value : '';
+      const provider = providerSelect ? providerSelect.value : currentProvider;
+      const unlocked = unlockedCheckbox ? unlockedCheckbox.checked : false;
+
+      if (!model) {
+        this.logEntry('SYSTEM', 'Select a model first', 'system');
+        return;
+      }
+
       saveBtn.disabled = true;
-      saveBtn.textContent = 'Switching...';
+      saveBtn.textContent = 'Saving...';
 
       try {
-        // For now, just apply the provider change (API key can be set separately)
-        const resp = await fetch('/api/auth/apply', {
-          method: 'POST',
+        const resp = await fetch(`/api/employee/${empId}/model`, {
+          method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            scope: 'employee',
-            employee_id: empId,
-            choice: `${provider}-api-key`,
-            api_key: '',
-          }),
+          body: JSON.stringify({ model, api_provider: provider, endpoint_unlocked: unlocked }),
         });
         const data = await resp.json();
         if (data.error) {
-          this.logEntry('SYSTEM', `Provider switch failed: ${data.error}`, 'system');
+          this.logEntry('SYSTEM', `Save failed: ${data.error}`, 'system');
         } else {
-          this.logEntry('CEO', `Switched to ${provider}`, 'ceo');
-          this._loadModelOrApiKeySection(empId);
+          const unlockLabel = unlocked ? ' [UNLOCKED]' : '';
+          this.logEntry('CEO', `Saved ${model} (${provider})${unlockLabel} for employee #${empId}`, 'ceo');
+          await this._loadModelOrApiKeySection(empId);
         }
       } catch (err) {
-        this.logEntry('SYSTEM', `Switch failed: ${err.message}`, 'system');
+        this.logEntry('SYSTEM', `Save failed: ${err.message}`, 'system');
       } finally {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save';
       }
     });
-
-    this._loadModelDropdown(empId, empData);
-
-    // Wire save button to saveEmployeeModel
-    document.getElementById('emp-model-save-btn').addEventListener('click', () => this.saveEmployeeModel());
   }
 
   async _loadModelDropdown(empId, empData) {
@@ -4219,16 +4348,26 @@ class AppController {
 
     if (!selections.length) return;
 
-    // Check if any selected candidate has hosting: self
-    const selfHosted = selections.filter(sel => {
+    // Check if any selected candidate needs remapping:
+    // - hosting: self (Claude CLI → needs company provider)
+    // - provider differs from user's default (e.g. anthropic talent on openrouter company)
+    const needsRemap = selections.filter(sel => {
       const c = this._selectedCandidates.get(sel.candidate_id);
-      return c && c.candidate && c.candidate.hosting === 'self';
+      if (!c || !c.candidate) return false;
+      const candidate = c.candidate;
+      if (candidate.hosting === 'self') return true;
+      // Check if candidate's provider differs from company default
+      if (candidate.api_provider && this._companyDefaultProvider &&
+          candidate.api_provider !== this._companyDefaultProvider) {
+        return true;
+      }
+      return false;
     });
 
-    if (selfHosted.length > 0) {
+    if (needsRemap.length > 0) {
       this._pendingRemapSelections = selections;
       this._pendingRemapBatchId = this._candidateBatchId;
-      this._showHostingRemapDialog(selfHosted);
+      this._showHostingRemapDialog(needsRemap);
       return;
     }
 
@@ -4285,7 +4424,7 @@ class AppController {
       });
   }
 
-  _showHostingRemapDialog(selfHostedCandidates) {
+  _showHostingRemapDialog(remapCandidates) {
     const modal = document.getElementById('hosting-remap-modal');
     const list = document.getElementById('remap-candidates-list');
     const auditPanel = document.getElementById('remap-audit-panel');
@@ -4305,15 +4444,18 @@ class AppController {
       this._remapProviders = providersData.providers || [];
       this._remapDefaultProvider = providersData.default || '';
 
-      for (const sel of selfHostedCandidates) {
+      for (const sel of remapCandidates) {
         const c = this._selectedCandidates.get(sel.candidate_id);
         const candidate = c ? c.candidate : {};
         const name = candidate.name || sel.candidate_id;
         const role = candidate.role || sel.role || '';
+        const isSelfHosted = candidate.hosting === 'self';
+        const originalProvider = candidate.api_provider || 'unknown';
 
         const card = document.createElement('div');
         card.className = 'remap-candidate-card';
         card.dataset.candidateId = sel.candidate_id;
+        if (isSelfHosted) card.dataset.remapType = 'self-hosted';
 
         const modelOptions = this._remapModels.map(m =>
           `<option value="${this._escapeHtml(m.id)}">${this._escapeHtml(m.name || m.id)}</option>`
@@ -4322,12 +4464,16 @@ class AppController {
           `<option value="${this._escapeHtml(p.id)}" ${p.id === this._remapDefaultProvider ? 'selected' : ''}>${this._escapeHtml(p.name)}</option>`
         ).join('');
 
+        const originalLabel = isSelfHosted
+          ? `Original: hosting: self (Claude CLI)`
+          : `Original: provider: ${this._escapeHtml(originalProvider)}`;
+
         card.innerHTML = `
           <div class="remap-candidate-header">
             <span class="remap-candidate-name">${this._escapeHtml(name)}</span>
             <span class="remap-candidate-role">${this._escapeHtml(role)}</span>
           </div>
-          <div class="remap-candidate-original">Original: hosting: self (Claude CLI)</div>
+          <div class="remap-candidate-original">${originalLabel}</div>
           <div class="remap-field-row">
             <span class="remap-field-label">Model:</span>
             <select class="remap-field-select remap-model-select" data-candidate-id="${this._escapeHtml(sel.candidate_id)}">
@@ -4366,13 +4512,17 @@ class AppController {
 
     for (const card of cards) {
       const cid = card.dataset.candidateId;
+      const isSelfHosted = card.dataset.remapType === 'self-hosted';
       const modelSelect = card.querySelector(`.remap-model-select[data-candidate-id="${cid}"]`);
       const providerSelect = card.querySelector(`.remap-provider-select[data-candidate-id="${cid}"]`);
-      remapOverrides[cid] = {
-        remap_hosting: 'company',
+      const overrides = {
         remap_llm_model: modelSelect ? modelSelect.value : '',
         remap_api_provider: providerSelect ? providerSelect.value : '',
       };
+      if (isSelfHosted) {
+        overrides.remap_hosting = 'company';
+      }
+      remapOverrides[cid] = overrides;
     }
 
     const selections = this._pendingRemapSelections;
@@ -5853,6 +6003,7 @@ class AppController {
 
       const defaultProvider = settings.default_provider || 'openrouter';
       const defaultModel = settings.default_model || '';
+      this._companyDefaultProvider = defaultProvider;
 
       let html = '';
       // Dynamic LLM provider cards

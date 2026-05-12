@@ -724,14 +724,16 @@ async def search_candidates(job_description: str) -> dict:
                  len(_last_search_results), len(grouped.get("roles", [])))
     _persist_candidates()  # persist search cache to survive restarts
 
-    # Talent Market results are pre-screened — auto-submit all as shortlist,
-    # grouped by role, skipping HR's LLM filtering step.
-    if from_market and _last_search_results:
+    # All results are auto-submitted as shortlist, grouped by role.
+    # This ensures the candidate modal always appears regardless of
+    # whether results came from local, cloud, or both.
+    if _last_search_results:
         all_ids = list(_last_search_results.keys())
-        logger.info("[recruitment] Auto-submitting {} merged candidates as shortlist", len(all_ids))
+        source_label = "merged" if from_market else "local"
+        logger.info("[recruitment] Auto-submitting {} {} candidates as shortlist", len(all_ids), source_label)
         result = await _auto_submit_shortlist(job_description, all_ids, grouped.get("roles", []))
         resp = {
-            "type": grouped.get("type", "market"),
+            "type": grouped.get("type", source_label),
             "summary": result,
             "roles": grouped.get("roles", []),
             "auto_shortlisted": True,

@@ -616,6 +616,7 @@ class EmployeeConfig(BaseModel):
     auth_method: str = "api_key"  # "api_key" | "oauth" (OAuth PKCE for Anthropic)
     oauth_refresh_token: str = ""  # OAuth refresh token (long-lived)
     model_profile_hint: str = ""  # Suggested cognitive budget profile name
+    endpoint_unlocked: bool = False  # When True, use employee's explicit api_provider/llm_model instead of talent defaults
 
     # Fields where empty string should be treated as missing (use field default)
     _NON_EMPTY_FIELDS: ClassVar[frozenset] = frozenset({"api_provider", "hosting", "auth_method"})
