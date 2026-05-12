@@ -4573,19 +4573,26 @@ class AppController {
     try {
       // Stage skills: clone talent repos so SKILL.md files are on disk
       progressDiv.querySelector('.remap-audit-progress-text').textContent = 'Downloading skills...';
-      await fetch('/api/candidates/stage-skills', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          batch_id: this._pendingRemapBatchId || '',
-          candidate_ids: candidateIds,
-        }),
-      });
+      try {
+        await fetch('/api/candidates/stage-skills', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            batch_id: this._pendingRemapBatchId || '',
+            candidate_ids: candidateIds,
+          }),
+        });
+      } catch (stageErr) {
+        this.logEntry('SYSTEM', `Stage-skills skipped: ${stageErr.message}`, 'system');
+      }
       progressDiv.querySelector('.remap-audit-progress-text').textContent = 'Auditing skills...';
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300000);
       const resp = await fetch('/api/candidates/audit-skills', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           batch_id: this._pendingRemapBatchId || '',
           candidate_ids: candidateIds,
@@ -4593,6 +4600,7 @@ class AppController {
           evaluator_provider: evaluatorProvider,
         }),
       });
+      clearTimeout(timeoutId);
       const data = await resp.json();
       progressDiv.classList.add('hidden');
 
