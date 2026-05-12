@@ -4624,6 +4624,8 @@ class AppController {
       }
 
       // Process skills sequentially
+      this._skillRetryCounts = {};
+      const baseTimeout = this._getAuditTimeout();
       let idx = 0;
       for (const sq of skillQueue) {
         idx++;
@@ -4634,10 +4636,15 @@ class AppController {
           el.querySelector('.remap-audit-skill-status').textContent = '🔍 Auditing...';
         }
 
+        const controller = new AbortController();
+        const timeoutMs = baseTimeout * 1000;
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
         try {
           const resp = await fetch('/api/candidates/audit-single-skill', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
             body: JSON.stringify({
               skill_name: sq.skill_name,
               batch_id: this._pendingRemapBatchId || '',
@@ -4646,6 +4653,7 @@ class AppController {
               evaluator_provider: evaluatorProvider,
             }),
           });
+          clearTimeout(timeoutId);
           if (!resp.ok) {
             const errorText = await resp.text();
             throw new Error(`HTTP ${resp.status}: ${errorText.substring(0, 200)}`);
@@ -4654,12 +4662,14 @@ class AppController {
 
           this._renderAuditResult(el, r);
         } catch (err) {
+          clearTimeout(timeoutId);
+          const isTimeout = err.name === 'AbortError';
           this._renderAuditResult(el, {
             skill_name: sq.skill_name,
             candidate_id: sq.candidate_id,
             status: 'error',
             findings: [],
-            error: err.message || 'Request failed',
+            error: isTimeout ? `Timed out after ${baseTimeout}s` : (err.message || 'Request failed'),
           });
         }
       }
@@ -4752,17 +4762,43 @@ class AppController {
     const evaluatorProvider = evProvSel ? evProvSel.value : '';
     const evaluatorModel = evModelSel ? evModelSel.value : '';
 
+    if (!this._skillRetryCounts) this._skillRetryCounts = {};
+    const retryCount = (this._skillRetryCounts[skillName] || 0) + 1;
+    this._skillRetryCounts[skillName] = retryCount;
+
+    // Exponential backoff: +1m, +2m, +4m, +8m, +16m (capped at 5 retries)
+    const baseTimeout = this._getAuditTimeout();
+    const backoffMinutes = Math.min(Math.pow(2, retryCount - 1), 16);
+    const timeoutSec = baseTimeout + (backoffMinutes * 60);
+
+    if (retryCount > 5) {
+      this._renderAuditResult(btn.closest('.remap-audit-skill'), {
+        skill_name: skillName,
+        candidate_id: candidateId,
+        status: 'error',
+        findings: [],
+        error: `Max retries (5) reached. Try a different model or increase timeout in Settings.`,
+      });
+      const retryBtn = btn.closest('.remap-audit-skill').querySelector('.remap-audit-retry-btn');
+      if (retryBtn) retryBtn.addEventListener('click', () => this._retryAuditSkill(retryBtn));
+      return;
+    }
+
     const el = btn.closest('.remap-audit-skill');
     if (el) {
-      el.querySelector('.remap-audit-skill-status').textContent = '🔍 Retrying...';
+      el.querySelector('.remap-audit-skill-status').textContent = `🔍 Retry #${retryCount} (${timeoutSec}s)...`;
     }
     btn.disabled = true;
-    btn.textContent = 'Retrying...';
+    btn.textContent = `Retry #${retryCount}...`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
 
     try {
       const resp = await fetch('/api/candidates/audit-single-skill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           skill_name: skillName,
           batch_id: this._pendingRemapBatchId || '',
@@ -4772,11 +4808,17 @@ class AppController {
           force: true,
         }),
       });
+      clearTimeout(timeoutId);
       if (!resp.ok) {
         const errorText = await resp.text();
         throw new Error(`HTTP ${resp.status}: ${errorText.substring(0, 200)}`);
       }
       const r = await resp.json();
+      if (r.status === 'error') {
+        // Retryable error — reset retry count for the next manual click
+      } else {
+        this._skillRetryCounts[skillName] = 0;
+      }
       this._renderAuditResult(el, r);
 
       // Re-bind buttons in this element
@@ -4785,16 +4827,27 @@ class AppController {
       const retryBtn = el.querySelector('.remap-audit-retry-btn');
       if (retryBtn) retryBtn.addEventListener('click', () => this._retryAuditSkill(retryBtn));
     } catch (err) {
+      clearTimeout(timeoutId);
+      const isTimeout = err.name === 'AbortError';
       this._renderAuditResult(el, {
         skill_name: skillName,
         candidate_id: candidateId,
         status: 'error',
         findings: [],
-        error: err.message || 'Retry failed',
+        error: isTimeout ? `Timed out after ${timeoutSec}s (retry #${retryCount})` : (err.message || 'Retry failed'),
       });
       const retryBtn = el.querySelector('.remap-audit-retry-btn');
       if (retryBtn) retryBtn.addEventListener('click', () => this._retryAuditSkill(retryBtn));
     }
+  }
+
+  _getAuditTimeout() {
+    const input = document.getElementById('api-tm-audit-timeout');
+    if (input) {
+      const val = parseInt(input.value, 10);
+      if (val >= 30) return val;
+    }
+    return 300;
   }
 
   async _rewriteSkill(btn) {
@@ -6262,6 +6315,12 @@ class AppController {
                 </label>
               </div>` : ''}
             </div>
+            <div style="margin:6px 0;display:flex;align-items:center;gap:6px;">
+              <label style="font-size:6.5px;color:var(--text-dim);margin-right:2px;">Skill Audit Timeout:</label>
+              <input type="number" id="api-tm-audit-timeout" value="${tm.skill_audit_timeout || 300}" min="30" max="3600" step="30"
+                style="width:50px;font-size:6px;padding:2px 4px;background:var(--bg-dark);color:var(--pixel-green);border:1px solid var(--border);font-family:monospace;" />
+              <span style="font-size:6px;color:var(--text-dim);">sec per skill</span>
+            </div>
             <div class="api-card-actions">
               <button class="pixel-btn small" onclick="app._saveApiSettings('talent_market')">Save</button>
               <span id="api-tm-result" class="api-test-result"></span>
@@ -6404,6 +6463,8 @@ class AppController {
       if (aiCheckbox) body.use_ai_search = aiCheckbox.checked;
       const modeVal = document.getElementById('api-tm-mode-val');
       if (modeVal) body.mode = modeVal.value;
+      const timeoutInput = document.getElementById('api-tm-audit-timeout');
+      if (timeoutInput) body.skill_audit_timeout = parseInt(timeoutInput.value, 10) || 300;
       try {
         const resp = await fetch('/api/settings/api', {
           method: 'PUT',

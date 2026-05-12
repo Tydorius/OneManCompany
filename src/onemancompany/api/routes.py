@@ -2822,6 +2822,7 @@ async def get_api_settings() -> dict:
         "connected": _get_talent_market_connected(),
         "local_talent_count": _get_local_talent_count(),
         "use_ai_search": tm.get("use_ai_search", False),
+        "skill_audit_timeout": tm.get("skill_audit_timeout", 300),
     }
 
     # Skills marketplace (stored in config.yaml, not .env)
@@ -2850,9 +2851,9 @@ async def update_api_settings(body: dict) -> dict:
         import yaml
         from onemancompany.core.config import APP_CONFIG_PATH, load_app_config, reload_app_config
         api_key = body.get("api_key", "")
-        has_toggle = "use_ai_search" in body or "mode" in body
+        has_toggle = "use_ai_search" in body or "mode" in body or "skill_audit_timeout" in body
         if not api_key and not has_toggle:
-            return {"error": "API key, use_ai_search, or mode is required"}
+            return {"error": "API key, use_ai_search, skill_audit_timeout, or mode is required"}
         config = load_app_config()
         tm = config.setdefault("talent_market", {})
         if api_key:
@@ -2861,6 +2862,11 @@ async def update_api_settings(body: dict) -> dict:
             tm["use_ai_search"] = bool(body["use_ai_search"])
         if "mode" in body and body["mode"] in ("local", "remote", "local+remote"):
             tm["mode"] = body["mode"]
+        if "skill_audit_timeout" in body:
+            try:
+                tm["skill_audit_timeout"] = max(30, int(body["skill_audit_timeout"]))
+            except (ValueError, TypeError):
+                pass
         write_text_utf(APP_CONFIG_PATH, yaml.dump(config, default_flow_style=False, allow_unicode=True))
         reload_app_config()
 
