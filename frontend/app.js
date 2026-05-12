@@ -4444,6 +4444,20 @@ class AppController {
       this._remapProviders = providersData.providers || [];
       this._remapDefaultProvider = providersData.default || '';
 
+      // Populate evaluator dropdowns in audit panel
+      const evProvSel = document.getElementById('remap-audit-evaluator-provider');
+      const evModelSel = document.getElementById('remap-audit-evaluator-model');
+      if (evProvSel) {
+        evProvSel.innerHTML = this._remapProviders.map(p =>
+          `<option value="${this._escapeHtml(p.id)}" ${p.id === this._remapDefaultProvider ? 'selected' : ''}>${this._escapeHtml(p.name)}</option>`
+        ).join('');
+      }
+      if (evModelSel) {
+        evModelSel.innerHTML = this._remapModels.map(m =>
+          `<option value="${this._escapeHtml(m.id)}">${this._escapeHtml(m.name || m.id)}</option>`
+        ).join('');
+      }
+
       for (const sel of remapCandidates) {
         const c = this._selectedCandidates.get(sel.candidate_id);
         const candidate = c ? c.candidate : {};
@@ -4544,9 +4558,11 @@ class AppController {
     resultsDiv.innerHTML = '';
     progressDiv.classList.remove('hidden');
 
-    // Use first provider's model or company default
-    const evaluatorProvider = this._remapProviders.length > 0 ? this._remapProviders[0].id : '';
-    const evaluatorModel = this._remapModels.length > 0 ? this._remapModels[0].id : '';
+    // Read evaluator selection from audit panel dropdowns
+    const evProvSel = document.getElementById('remap-audit-evaluator-provider');
+    const evModelSel = document.getElementById('remap-audit-evaluator-model');
+    const evaluatorProvider = evProvSel ? evProvSel.value : (this._remapProviders.length > 0 ? this._remapProviders[0].id : '');
+    const evaluatorModel = evModelSel ? evModelSel.value : (this._remapModels.length > 0 ? this._remapModels[0].id : '');
 
     modelBadge.textContent = evaluatorModel || 'default';
 
@@ -4555,6 +4571,18 @@ class AppController {
       : [];
 
     try {
+      // Stage skills: clone talent repos so SKILL.md files are on disk
+      progressDiv.querySelector('.remap-audit-progress-text').textContent = 'Downloading skills...';
+      await fetch('/api/candidates/stage-skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          batch_id: this._pendingRemapBatchId || '',
+          candidate_ids: candidateIds,
+        }),
+      });
+      progressDiv.querySelector('.remap-audit-progress-text').textContent = 'Auditing skills...';
+
       const resp = await fetch('/api/candidates/audit-skills', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4653,7 +4681,10 @@ class AppController {
     const skillName = btn.dataset.skill;
     const select = btn.closest('.remap-audit-rewrite-row').querySelector('.remap-audit-rewrite-select');
     const model = select ? select.value : '';
-    const provider = this._remapProviders.length > 0 ? this._remapProviders[0].id : '';
+    const provider = (() => {
+      const sel = document.getElementById('remap-audit-evaluator-provider');
+      return sel ? sel.value : (this._remapProviders.length > 0 ? this._remapProviders[0].id : '');
+    })();
 
     let findings = [];
     try { findings = JSON.parse(btn.dataset.findings || '[]'); } catch (e) { findings = []; }

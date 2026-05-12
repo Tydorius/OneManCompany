@@ -1520,11 +1520,13 @@ def _load_skill_content(skill_name: str) -> str:
     if default.exists():
         return default.read_text(encoding="utf-8")
 
+    # Search all talent directories: runtime (cloned from market), user, built-in
     try:
-        from onemancompany.core.config import settings as _s
-        talents_dir = Path(_s.company_dir) / "talents"
-        if talents_dir.exists():
-            for talent_dir in talents_dir.iterdir():
+        from onemancompany.core.config import TALENTS_RUNTIME_DIR, USER_TALENTS_DIR, TALENTS_DIR
+        for base in (TALENTS_RUNTIME_DIR, USER_TALENTS_DIR, TALENTS_DIR):
+            if not base.exists():
+                continue
+            for talent_dir in base.iterdir():
                 skill_file = talent_dir / "skills" / skill_name / "SKILL.md"
                 if skill_file.exists():
                     return skill_file.read_text(encoding="utf-8")
@@ -1532,6 +1534,21 @@ def _load_skill_content(skill_name: str) -> str:
         pass
 
     return ""
+
+
+def _save_skill_content(skill_name: str, content: str) -> bool:
+    """Save rewritten skill content back to the SKILL.md file on disk."""
+    from onemancompany.core.config import TALENTS_RUNTIME_DIR, USER_TALENTS_DIR, TALENTS_DIR
+    for base in (TALENTS_RUNTIME_DIR, USER_TALENTS_DIR, TALENTS_DIR):
+        if not base.exists():
+            continue
+        for talent_dir in base.iterdir():
+            skill_file = talent_dir / "skills" / skill_name / "SKILL.md"
+            if skill_file.exists():
+                skill_file.write_text(content, encoding="utf-8")
+                logger.debug("[skill-rewrite] Saved rewritten skill '{}' to {}", skill_name, skill_file)
+                return True
+    return False
 
 
 async def _make_auditor_llm(model: str = "", api_provider: str = ""):
@@ -1560,6 +1577,56 @@ async def _make_auditor_llm(model: str = "", api_provider: str = ""):
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=_model, api_key=api_key, base_url=base_url,
                           temperature=0.3, max_retries=2, timeout=120.0)
+
+
+@router.post("/api/candidates/stage-skills")
+async def stage_skills(body: dict) -> dict:
+    """Clone talent repos so skill files are available locally for auditing."""
+    from onemancompany.agents.recruitment import pending_candidates
+    from onemancompany.agents.onboarding import clone_talent_repo, resolve_talent_dir
+
+    batch_id = body.get("batch_id", "")
+    candidate_ids = body.get("candidate_ids", [])
+    if not candidate_ids:
+        return {"staged": [], "errors": []}
+
+    all_candidates = pending_candidates.get(batch_id, [])
+    staged = []
+    errors = []
+
+    for cid in candidate_ids:
+        candidate = next((c for c in all_candidates if (c.get("id") or c.get("talent_id")) == cid), None)
+        if not candidate:
+            continue
+
+        talent_id = candidate.get("talent_id", "") or candidate.get("id", "")
+
+        # Already cloned? Skip.
+        if talent_id and resolve_talent_dir(talent_id):
+            staged.append({"candidate_id": cid, "talent_id": talent_id, "status": "already_staged"})
+            continue
+
+        # No source repo — local/default talent, nothing to clone
+        source_repo = candidate.get("source_repo", "")
+        if not talent_id or not source_repo:
+            staged.append({"candidate_id": cid, "talent_id": talent_id, "status": "local"})
+            continue
+
+        # Clone from Talent Market
+        try:
+            from onemancompany.agents.recruitment import talent_market
+            onboard_result = await talent_market.onboard(talent_id)
+            repo_url = onboard_result.get("repo_url", "") or source_repo
+            if repo_url:
+                await clone_talent_repo(repo_url, talent_id)
+                staged.append({"candidate_id": cid, "talent_id": talent_id, "status": "cloned"})
+            else:
+                errors.append({"candidate_id": cid, "error": "No repo URL available"})
+        except Exception as e:
+            logger.warning("[stage-skills] Failed to clone talent {}: {}", talent_id, e)
+            errors.append({"candidate_id": cid, "error": str(e)[:200]})
+
+    return {"staged": staged, "errors": errors}
 
 
 @router.post("/api/candidates/audit-skills")
@@ -1595,6 +1662,13 @@ async def audit_skills(body: dict) -> dict:
             if not skill_name:
                 continue
             skill_content = _load_skill_content(skill_name)
+            if not skill_content:
+                # Fallback: use description from candidate's skill_set (cloud talents)
+                for s in skills:
+                    s_name = s if isinstance(s, str) else s.get("name", "")
+                    if s_name == skill_name:
+                        skill_content = s.get("description", "") if isinstance(s, dict) else ""
+                        break
             if not skill_content:
                 results.append({
                     "skill_name": skill_name, "candidate_id": cid,
@@ -1667,6 +1741,10 @@ async def rewrite_skill(body: dict) -> dict:
             rewritten = re.sub(r"^```(?:markdown|md)?\n?", "", rewritten)
             rewritten = re.sub(r"\n?```$", "", rewritten)
 
+        # Save rewritten content directly to the skill file on disk
+        _save_skill_content(skill_name, rewritten)
+
+        # Also keep a copy for the hire flow to apply to employee dir
         rewrites_dir = Path(_s.company_dir) / ".skill_rewrites"
         rewrites_dir.mkdir(parents=True, exist_ok=True)
         (rewrites_dir / f"{skill_name}.md").write_text(rewritten, encoding="utf-8")
@@ -4879,19 +4957,23 @@ async def _do_hire_single(
 
         # Clone talent repo if sourced from Talent Market (batch-hire does this
         # before _do_batch_hire, but single-hire was missing this step).
+        # Skip if already staged by the skill audit flow.
         talent_id = candidate.get("talent_id", "") or candidate.get("id", "")
         clone_error: str = ""
         if talent_id and candidate.get("source_repo"):
-            from onemancompany.agents.onboarding import clone_talent_repo
-            from onemancompany.agents.recruitment import talent_market
-            try:
-                onboard_result = await talent_market.onboard(talent_id)
-                repo_url = onboard_result.get("repo_url", "") or candidate.get("source_repo", "")
-                if repo_url:
-                    await clone_talent_repo(repo_url, talent_id)
-            except Exception as e:
-                clone_error = str(e)
-                logger.warning("[hiring] Failed to clone talent {}: {}", talent_id, e)
+            from onemancompany.agents.onboarding import clone_talent_repo, resolve_talent_dir
+            if resolve_talent_dir(talent_id):
+                logger.debug("[hiring] Talent {} already staged, skipping clone", talent_id)
+            else:
+                from onemancompany.agents.recruitment import talent_market
+                try:
+                    onboard_result = await talent_market.onboard(talent_id)
+                    repo_url = onboard_result.get("repo_url", "") or candidate.get("source_repo", "")
+                    if repo_url:
+                        await clone_talent_repo(repo_url, talent_id)
+                except Exception as e:
+                    clone_error = str(e)
+                    logger.warning("[hiring] Failed to clone talent {}: {}", talent_id, e)
 
         # Read authoritative fields from the talent profile on disk;
         # fall back to candidate dict for AI-generated / repo-less talents.

@@ -192,7 +192,7 @@ def _normalize_market_candidate(candidate: dict) -> dict:
     for sd in talent.get("skills_detail", []):
         skill_set.append({
             "name": sd.get("name", ""),
-            "description": sd.get("description", sd.get("content_preview", "")[:200]),
+            "description": sd.get("description", sd.get("content_preview", "")),
             "code": "",
         })
 
@@ -258,7 +258,7 @@ def _talent_to_candidate(talent: dict) -> dict:
         content = skill_contents[i] if i < len(skill_contents) else ""
         skill_set.append({
             "name": name,
-            "description": content[:200] if content else f"{name} skill",
+            "description": content if content else f"{name} skill",
             "code": "",
         })
 
