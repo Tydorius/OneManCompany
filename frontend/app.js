@@ -4691,6 +4691,7 @@ class AppController {
 
     const statusClass = r.status === 'clean' ? 'clean' : r.status === 'flagged' ? 'flagged' : 'error';
     const statusLabel = r.status === 'clean' ? '✅ Clean' : r.status === 'flagged' ? '⚠️ Flagged' : '❌ Error';
+    const cachedTag = r.cached ? ' 📋 Cached' : '';
     el.className = `remap-audit-skill ${statusClass}`;
 
     let findingsHtml = '';
@@ -4734,7 +4735,7 @@ class AppController {
     el.innerHTML = `
       <div class="remap-audit-skill-header">
         <span class="remap-audit-skill-name">${this._escapeHtml(r.skill_name)}</span>
-        <span class="remap-audit-skill-status">${statusLabel}</span>
+        <span class="remap-audit-skill-status">${statusLabel}${cachedTag}</span>
       </div>
       ${findingsHtml}`;
   }
@@ -4764,6 +4765,7 @@ class AppController {
           candidate_id: candidateId,
           evaluator_model: evaluatorModel,
           evaluator_provider: evaluatorProvider,
+          force: true,
         }),
       });
       const r = await resp.json();

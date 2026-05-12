@@ -1455,6 +1455,60 @@ async def list_configured_providers() -> dict:
 # Skill audit — LLM-powered platform-lock detection
 # ---------------------------------------------------------------------------
 
+import hashlib as _hashlib
+import json as _json_mod
+
+
+def _skill_content_hash(content: str) -> str:
+    return _hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _audit_cache_dir() -> Path:
+    from onemancompany.core.config import settings as _s
+    d = Path(_s.company_dir) / ".audit_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _cache_safe_name(skill_name: str) -> str:
+    return skill_name.replace("/", "_").replace("\\", "_").replace(" ", "_")
+
+
+def _get_cached_audit(skill_name: str, content_hash: str) -> dict | None:
+    cache_file = _audit_cache_dir() / f"{_cache_safe_name(skill_name)}.json"
+    if not cache_file.exists():
+        return None
+    try:
+        data = _json_mod.loads(cache_file.read_text("utf-8"))
+        if data.get("content_hash") == content_hash:
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def _save_cached_audit(
+    skill_name: str,
+    content_hash: str,
+    result: dict,
+    evaluator_model: str = "",
+    evaluator_provider: str = "",
+) -> None:
+    cache_file = _audit_cache_dir() / f"{_cache_safe_name(skill_name)}.json"
+    entry = {
+        "content_hash": content_hash,
+        "skill_name": skill_name,
+        "status": result.get("status", "error"),
+        "findings": result.get("findings", []),
+        "skill_content_preview": result.get("skill_content_preview", ""),
+        "audited_at": datetime.now().isoformat(),
+        "evaluator_model": evaluator_model,
+        "evaluator_provider": evaluator_provider,
+    }
+    cache_file.write_text(_json_mod.dumps(entry, ensure_ascii=False), encoding="utf-8")
+    logger.debug("[audit-cache] Saved cache for '{}' (hash={:.12}...)", skill_name, content_hash)
+
+
 _SKILL_AUDITOR_PROMPT = """\
 You are a skill compatibility auditor. You will be given the content of a SKILL.md \
 file from an AI agent platform. Your job is to identify any platform-specific \
@@ -1720,7 +1774,7 @@ async def audit_skills(body: dict) -> dict:
 
 @router.post("/api/candidates/audit-single-skill")
 async def audit_single_skill(body: dict) -> dict:
-    """Audit a single skill for platform-specific hooks. Used for incremental UI updates."""
+    """Audit a single skill for platform-specific hooks. Uses hash-based cache to skip re-auditing."""
     import json as _json
 
     from onemancompany.agents.recruitment import pending_candidates
@@ -1730,19 +1784,12 @@ async def audit_single_skill(body: dict) -> dict:
     candidate_id = body.get("candidate_id", "")
     evaluator_model = body.get("evaluator_model", "")
     evaluator_provider = body.get("evaluator_provider", "")
+    force = body.get("force", False)
 
     if not skill_name:
         return {
             "skill_name": skill_name, "candidate_id": candidate_id,
             "status": "error", "findings": [], "error": "skill_name is required",
-            "skill_content_preview": "",
-        }
-
-    llm = await _make_auditor_llm(evaluator_model, evaluator_provider)
-    if not llm:
-        return {
-            "skill_name": skill_name, "candidate_id": candidate_id,
-            "status": "error", "findings": [], "error": "No LLM available for auditing",
             "skill_content_preview": "",
         }
 
@@ -1768,6 +1815,31 @@ async def audit_single_skill(body: dict) -> dict:
             "skill_content_preview": "",
         }
 
+    content_hash = _skill_content_hash(skill_content)
+
+    # Check cache (skip if force=True from retry button)
+    if not force:
+        cached = _get_cached_audit(skill_name, content_hash)
+        if cached:
+            logger.debug("[audit-cache] Cache hit for '{}' (hash={:.12}...)", skill_name, content_hash)
+            return {
+                "skill_name": skill_name,
+                "candidate_id": candidate_id,
+                "status": cached.get("status", "error"),
+                "findings": cached.get("findings", []),
+                "skill_content_preview": cached.get("skill_content_preview", ""),
+                "cached": True,
+                "audited_at": cached.get("audited_at", ""),
+            }
+
+    llm = await _make_auditor_llm(evaluator_model, evaluator_provider)
+    if not llm:
+        return {
+            "skill_name": skill_name, "candidate_id": candidate_id,
+            "status": "error", "findings": [], "error": "No LLM available for auditing",
+            "skill_content_preview": skill_content[:200],
+        }
+
     try:
         from langchain_core.messages import HumanMessage
         prompt = _SKILL_AUDITOR_PROMPT + "\n\n--- SKILL CONTENT ---\n" + skill_content
@@ -1777,13 +1849,20 @@ async def audit_single_skill(body: dict) -> dict:
             raw = re.sub(r"^```(?:json)?\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
         parsed = _json.loads(raw)
-        return {
+        result = {
             "skill_name": skill_name,
             "candidate_id": candidate_id,
             "status": parsed.get("status", "error"),
             "findings": parsed.get("findings", []),
             "skill_content_preview": skill_content[:200],
         }
+        # Cache clean/flagged results (not errors — those should always retry)
+        if result["status"] in ("clean", "flagged"):
+            _save_cached_audit(
+                skill_name, content_hash, result,
+                evaluator_model=evaluator_model, evaluator_provider=evaluator_provider,
+            )
+        return result
     except Exception as e:
         logger.warning("[skill-audit] Failed to audit skill '{}': {}", skill_name, e)
         return {
@@ -1845,6 +1924,73 @@ async def rewrite_skill(body: dict) -> dict:
     except Exception as e:
         logger.exception("[skill-rewrite] Failed to rewrite skill '{}'", skill_name)
         return {"status": "error", "skill_name": skill_name, "error": str(e)[:200]}
+
+
+@router.post("/api/candidates/cleanup-staged-talents")
+async def cleanup_staged_talents(body: dict = None) -> dict:
+    """Report on staged talents with no audit cache, optionally remove them."""
+    from onemancompany.core.config import TALENTS_RUNTIME_DIR
+
+    body = body or {}
+    remove_unaudited = body.get("remove_unaudited", False)
+    remove_all_cache = body.get("remove_all_cache", False)
+
+    # Optionally wipe the entire audit cache
+    if remove_all_cache:
+        cache_dir = _audit_cache_dir()
+        count = 0
+        if cache_dir.exists():
+            for f in cache_dir.glob("*.json"):
+                f.unlink(missing_ok=True)
+                count += 1
+        logger.info("[audit-cleanup] Purged {} cache entries", count)
+        return {"status": "done", "cache_purged": count, "talents": [], "removed": []}
+
+    # Collect which skills have cached audit results
+    cache_dir = _audit_cache_dir()
+    cached_skills: set[str] = set()
+    if cache_dir.exists():
+        for f in cache_dir.glob("*.json"):
+            try:
+                data = _json_mod.loads(f.read_text("utf-8"))
+                cached_skills.add(data.get("skill_name", f.stem))
+            except Exception:
+                pass
+
+    if not TALENTS_RUNTIME_DIR.exists():
+        return {"talents": [], "removed": [], "cache_purged": 0}
+
+    report = []
+    removed = []
+    for talent_dir in sorted(TALENTS_RUNTIME_DIR.iterdir()):
+        if not talent_dir.is_dir() or talent_dir.name.startswith("."):
+            continue
+        skills_dir = talent_dir / "skills"
+        if not skills_dir.exists():
+            continue
+        all_skills: list[str] = []
+        audited: list[str] = []
+        for skill_dir in sorted(skills_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            all_skills.append(skill_dir.name)
+            if skill_dir.name in cached_skills:
+                audited.append(skill_dir.name)
+        unaudited = [s for s in all_skills if s not in audited]
+        if all_skills:
+            report.append({
+                "talent_id": talent_dir.name,
+                "skills_total": len(all_skills),
+                "skills_audited": len(audited),
+                "skills_unaudited": len(unaudited),
+                "unaudited_skills": unaudited,
+            })
+            if remove_unaudited and len(audited) == 0:
+                shutil.rmtree(talent_dir)
+                removed.append(talent_dir.name)
+                logger.info("[audit-cleanup] Removed unaudited staged talent: {}", talent_dir.name)
+
+    return {"talents": report, "removed": removed, "cache_purged": 0}
 
 
 @router.get("/api/employee/{employee_id}")
