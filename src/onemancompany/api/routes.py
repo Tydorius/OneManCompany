@@ -1469,6 +1469,18 @@ Look for:
 6. Shell scripts or hooks that assume a specific runtime environment
 7. File paths or directory structures specific to one platform
 
+IMPORTANT — Do NOT flag any of the following as platform-specific:
+- Cross-references to other skills by name (e.g., "superpowers:writing-plans", "executing-plans") \
+  — these are internal skill-to-skill references that will resolve when all skills are co-deployed.
+- Mentions of file paths that reference other skill files within the same talent package \
+  (e.g., "spec-document-reviewer-prompt.md", "./implementer-prompt.md", "skills/brainstorming/visual-companion.md").
+- Tool names that are internal skill names or skill invocation patterns (e.g., "Task(...)" when \
+  referring to delegating to another skill, "TodoWrite" as a generic task tracker).
+- Generic CLI commands available on all platforms (e.g., "gh pr create", "grep", standard Unix commands).
+
+Only flag references that bind the skill to a SPECIFIC external platform runtime (Claude Code, Cursor, \
+Codex, Kiln, etc.) where the skill would break if run on a different platform.
+
 For each finding, report:
 - platform: which platform/tool it targets
 - type: one of "config_reference", "cli_call", "tool_name", "auth_pattern", "env_var", "script_hook", "file_path"
