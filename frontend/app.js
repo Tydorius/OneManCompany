@@ -4558,7 +4558,6 @@ class AppController {
     resultsDiv.innerHTML = '';
     progressDiv.classList.remove('hidden');
 
-    // Read evaluator selection from audit panel dropdowns
     const evProvSel = document.getElementById('remap-audit-evaluator-provider');
     const evModelSel = document.getElementById('remap-audit-evaluator-model');
     const evaluatorProvider = evProvSel ? evProvSel.value : (this._remapProviders.length > 0 ? this._remapProviders[0].id : '');
@@ -4570,9 +4569,11 @@ class AppController {
       ? this._pendingRemapSelections.map(s => s.candidate_id)
       : [];
 
+    const progressText = progressDiv.querySelector('.remap-audit-progress-text');
+
     try {
       // Stage skills: clone talent repos so SKILL.md files are on disk
-      progressDiv.querySelector('.remap-audit-progress-text').textContent = 'Downloading skills...';
+      progressText.textContent = 'Downloading skills...';
       try {
         await fetch('/api/candidates/stage-skills', {
           method: 'POST',
@@ -4585,91 +4586,90 @@ class AppController {
       } catch (stageErr) {
         this.logEntry('SYSTEM', `Stage-skills skipped: ${stageErr.message}`, 'system');
       }
-      progressDiv.querySelector('.remap-audit-progress-text').textContent = 'Auditing skills...';
 
-      const controller = new AbortController();
-      const timeoutMs = Math.max(300000, candidateIds.length * 13 * 90000);
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      const resp = await fetch('/api/candidates/audit-skills', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          batch_id: this._pendingRemapBatchId || '',
-          candidate_ids: candidateIds,
-          evaluator_model: evaluatorModel,
-          evaluator_provider: evaluatorProvider,
-        }),
-      });
-      clearTimeout(timeoutId);
-      const data = await resp.json();
-      progressDiv.classList.add('hidden');
+      // Collect all unique skill names across selected candidates
+      const skillQueue = [];
+      const seenSkills = new Set();
+      for (const cid of candidateIds) {
+        const candidate = this._allCandidatesMap ? this._allCandidatesMap.get(cid) : null;
+        if (!candidate) continue;
+        const skills = candidate.skill_set || candidate.skills || [];
+        for (const s of skills) {
+          const name = typeof s === 'string' ? s : (s.name || '');
+          if (name && !seenSkills.has(name)) {
+            seenSkills.add(name);
+            skillQueue.push({ skill_name: name, candidate_id: cid });
+          }
+        }
+      }
 
-      if (data.error) {
-        resultsDiv.innerHTML = `<div class="remap-audit-skill error">Error: ${this._escapeHtml(data.error)}</div>`;
+      if (skillQueue.length === 0) {
+        progressDiv.classList.add('hidden');
+        resultsDiv.innerHTML = '<div class="remap-audit-skill error">No skills found to audit.</div>';
+        auditPanel.classList.remove('hidden');
         return;
       }
 
-      const modelUsed = data.evaluator_model_used || 'unknown';
-      modelBadge.textContent = modelUsed;
-
-      // Group results by skill name (deduplicate across candidates)
-      const seen = new Set();
-      for (const r of (data.results || [])) {
-        if (seen.has(r.skill_name)) continue;
-        seen.add(r.skill_name);
-
-        const statusClass = r.status === 'clean' ? 'clean' : r.status === 'flagged' ? 'flagged' : 'error';
-        const statusLabel = r.status === 'clean' ? '✅ Clean' : r.status === 'flagged' ? '⚠️ Flagged' : '❌ Error';
-
+      // Create placeholder entries for each skill
+      for (const sq of skillQueue) {
         const el = document.createElement('div');
-        el.className = `remap-audit-skill ${statusClass}`;
-
-        let findingsHtml = '';
-        if (r.findings && r.findings.length > 0) {
-          findingsHtml = r.findings.map(f => {
-            const sev = f.severity || 'low';
-            return `<div class="remap-audit-finding">
-              <span class="severity-${sev}">[${sev.toUpperCase()}]</span>
-              ${this._escapeHtml(f.type || '')}: ${this._escapeHtml(f.detail || '')}
-              <span style="color:var(--text-dim)">(${this._escapeHtml(f.platform || '')})</span>
-            </div>`;
-          }).join('');
-
-          const rewriteOptions = this._remapModels.map(m =>
-            `<option value="${this._escapeHtml(m.id)}">${this._escapeHtml(m.name || m.id)}</option>`
-          ).join('');
-          findingsHtml += `
-            <div class="remap-audit-rewrite-row">
-              <span class="remap-field-label">Rewrite with:</span>
-              <select class="remap-audit-rewrite-select" data-skill="${this._escapeHtml(r.skill_name)}">
-                ${rewriteOptions}
-              </select>
-              <button class="remap-audit-rewrite-btn" data-skill="${this._escapeHtml(r.skill_name)}"
-                      data-findings='${JSON.stringify(r.findings).replace(/'/g, "&#39;")}'>
-                🔄 Rewrite
-              </button>
-            </div>`;
-        }
-
-        if (r.error) {
-          findingsHtml = `<div class="remap-audit-finding">${this._escapeHtml(r.error)}</div>`;
-        }
-
+        el.className = 'remap-audit-sskill';
+        el.dataset.skillName = sq.skill_name;
         el.innerHTML = `
           <div class="remap-audit-skill-header">
-            <span class="remap-audit-skill-name">${this._escapeHtml(r.skill_name)}</span>
-            <span class="remap-audit-skill-status">${statusLabel}</span>
-          </div>
-          ${findingsHtml}
-        `;
-
+            <span class="remap-audit-skill-name">${this._escapeHtml(sq.skill_name)}</span>
+            <span class="remap-audit-skill-status">⏳ Pending</span>
+          </div>`;
         resultsDiv.appendChild(el);
       }
+
+      // Process skills sequentially
+      let idx = 0;
+      for (const sq of skillQueue) {
+        idx++;
+        progressText.textContent = `Auditing skill ${idx}/${skillQueue.length}: ${sq.skill_name}`;
+
+        const el = resultsDiv.querySelector(`[data-skill-name="${CSS.escape(sq.skill_name)}"]`);
+        if (el) {
+          el.querySelector('.remap-audit-skill-status').textContent = '🔍 Auditing...';
+        }
+
+        try {
+          const resp = await fetch('/api/candidates/audit-single-skill', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              skill_name: sq.skill_name,
+              batch_id: this._pendingRemapBatchId || '',
+              candidate_id: sq.candidate_id,
+              evaluator_model: evaluatorModel,
+              evaluator_provider: evaluatorProvider,
+            }),
+          });
+          const r = await resp.json();
+
+          this._renderAuditResult(el, r);
+        } catch (err) {
+          this._renderAuditResult(el, {
+            skill_name: sq.skill_name,
+            candidate_id: sq.candidate_id,
+            status: 'error',
+            findings: [],
+            error: err.message || 'Request failed',
+          });
+        }
+      }
+
+      progressDiv.classList.add('hidden');
 
       // Bind rewrite buttons
       resultsDiv.querySelectorAll('.remap-audit-rewrite-btn').forEach(btn => {
         btn.addEventListener('click', () => this._rewriteSkill(btn));
+      });
+
+      // Bind retry buttons
+      resultsDiv.querySelectorAll('.remap-audit-retry-btn').forEach(btn => {
+        btn.addEventListener('click', () => this._retryAuditSkill(btn));
       });
 
       // Add warning
@@ -4684,6 +4684,107 @@ class AppController {
     }
 
     auditPanel.classList.remove('hidden');
+  }
+
+  _renderAuditResult(el, r) {
+    if (!el) return;
+
+    const statusClass = r.status === 'clean' ? 'clean' : r.status === 'flagged' ? 'flagged' : 'error';
+    const statusLabel = r.status === 'clean' ? '✅ Clean' : r.status === 'flagged' ? '⚠️ Flagged' : '❌ Error';
+    el.className = `remap-audit-skill ${statusClass}`;
+
+    let findingsHtml = '';
+    if (r.findings && r.findings.length > 0) {
+      findingsHtml = r.findings.map(f => {
+        const sev = f.severity || 'low';
+        return `<div class="remap-audit-finding">
+          <span class="severity-${sev}">[${sev.toUpperCase()}]</span>
+          ${this._escapeHtml(f.type || '')}: ${this._escapeHtml(f.detail || '')}
+          <span style="color:var(--text-dim)">(${this._escapeHtml(f.platform || '')})</span>
+        </div>`;
+      }).join('');
+
+      const rewriteOptions = this._remapModels.map(m =>
+        `<option value="${this._escapeHtml(m.id)}">${this._escapeHtml(m.name || m.id)}</option>`
+      ).join('');
+      findingsHtml += `
+        <div class="remap-audit-rewrite-row">
+          <span class="remap-field-label">Rewrite with:</span>
+          <select class="remap-audit-rewrite-select" data-skill="${this._escapeHtml(r.skill_name)}">
+            ${rewriteOptions}
+          </select>
+          <button class="remap-audit-rewrite-btn" data-skill="${this._escapeHtml(r.skill_name)}"
+                  data-findings='${JSON.stringify(r.findings).replace(/'/g, "&#39;")}'>
+            🔄 Rewrite
+          </button>
+        </div>`;
+    }
+
+    if (r.error) {
+      findingsHtml += `<div class="remap-audit-finding">${this._escapeHtml(r.error)}</div>`;
+      findingsHtml += `
+        <div class="remap-audit-rewrite-row">
+          <button class="remap-audit-retry-btn" data-skill="${this._escapeHtml(r.skill_name)}"
+                  data-candidate="${this._escapeHtml(r.candidate_id || '')}">
+            🔄 Retry
+          </button>
+        </div>`;
+    }
+
+    el.innerHTML = `
+      <div class="remap-audit-skill-header">
+        <span class="remap-audit-skill-name">${this._escapeHtml(r.skill_name)}</span>
+        <span class="remap-audit-skill-status">${statusLabel}</span>
+      </div>
+      ${findingsHtml}`;
+  }
+
+  async _retryAuditSkill(btn) {
+    const skillName = btn.dataset.skill;
+    const candidateId = btn.dataset.candidate;
+    const evProvSel = document.getElementById('remap-audit-evaluator-provider');
+    const evModelSel = document.getElementById('remap-audit-evaluator-model');
+    const evaluatorProvider = evProvSel ? evProvSel.value : '';
+    const evaluatorModel = evModelSel ? evModelSel.value : '';
+
+    const el = btn.closest('.remap-audit-skill');
+    if (el) {
+      el.querySelector('.remap-audit-skill-status').textContent = '🔍 Retrying...';
+    }
+    btn.disabled = true;
+    btn.textContent = 'Retrying...';
+
+    try {
+      const resp = await fetch('/api/candidates/audit-single-skill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          skill_name: skillName,
+          batch_id: this._pendingRemapBatchId || '',
+          candidate_id: candidateId,
+          evaluator_model: evaluatorModel,
+          evaluator_provider: evaluatorProvider,
+        }),
+      });
+      const r = await resp.json();
+      this._renderAuditResult(el, r);
+
+      // Re-bind buttons in this element
+      const rewriteBtn = el.querySelector('.remap-audit-rewrite-btn');
+      if (rewriteBtn) rewriteBtn.addEventListener('click', () => this._rewriteSkill(rewriteBtn));
+      const retryBtn = el.querySelector('.remap-audit-retry-btn');
+      if (retryBtn) retryBtn.addEventListener('click', () => this._retryAuditSkill(retryBtn));
+    } catch (err) {
+      this._renderAuditResult(el, {
+        skill_name: skillName,
+        candidate_id: candidateId,
+        status: 'error',
+        findings: [],
+        error: err.message || 'Retry failed',
+      });
+      const retryBtn = el.querySelector('.remap-audit-retry-btn');
+      if (retryBtn) retryBtn.addEventListener('click', () => this._retryAuditSkill(retryBtn));
+    }
   }
 
   async _rewriteSkill(btn) {

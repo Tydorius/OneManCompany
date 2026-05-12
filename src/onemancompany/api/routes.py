@@ -1706,6 +1706,81 @@ async def audit_skills(body: dict) -> dict:
     return {"results": results, "evaluator_model_used": evaluator_model or "default"}
 
 
+@router.post("/api/candidates/audit-single-skill")
+async def audit_single_skill(body: dict) -> dict:
+    """Audit a single skill for platform-specific hooks. Used for incremental UI updates."""
+    import json as _json
+
+    from onemancompany.agents.recruitment import pending_candidates
+
+    skill_name = body.get("skill_name", "")
+    batch_id = body.get("batch_id", "")
+    candidate_id = body.get("candidate_id", "")
+    evaluator_model = body.get("evaluator_model", "")
+    evaluator_provider = body.get("evaluator_provider", "")
+
+    if not skill_name:
+        return {
+            "skill_name": skill_name, "candidate_id": candidate_id,
+            "status": "error", "findings": [], "error": "skill_name is required",
+            "skill_content_preview": "",
+        }
+
+    llm = await _make_auditor_llm(evaluator_model, evaluator_provider)
+    if not llm:
+        return {
+            "skill_name": skill_name, "candidate_id": candidate_id,
+            "status": "error", "findings": [], "error": "No LLM available for auditing",
+            "skill_content_preview": "",
+        }
+
+    skill_content = _load_skill_content(skill_name)
+    if not skill_content and candidate_id:
+        all_candidates = pending_candidates.get(batch_id, [])
+        candidate = next(
+            (c for c in all_candidates if (c.get("id") or c.get("talent_id")) == candidate_id),
+            None,
+        )
+        if candidate:
+            skills = candidate.get("skill_set", candidate.get("skills", []))
+            for s in skills:
+                s_name = s if isinstance(s, str) else s.get("name", "")
+                if s_name == skill_name and isinstance(s, dict):
+                    skill_content = s.get("description", "")
+                    break
+
+    if not skill_content:
+        return {
+            "skill_name": skill_name, "candidate_id": candidate_id,
+            "status": "error", "findings": [], "error": "Skill content not found on disk",
+            "skill_content_preview": "",
+        }
+
+    try:
+        from langchain_core.messages import HumanMessage
+        prompt = _SKILL_AUDITOR_PROMPT + "\n\n--- SKILL CONTENT ---\n" + skill_content
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        raw = response.content.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+        parsed = _json.loads(raw)
+        return {
+            "skill_name": skill_name,
+            "candidate_id": candidate_id,
+            "status": parsed.get("status", "error"),
+            "findings": parsed.get("findings", []),
+            "skill_content_preview": skill_content[:200],
+        }
+    except Exception as e:
+        logger.warning("[skill-audit] Failed to audit skill '{}': {}", skill_name, e)
+        return {
+            "skill_name": skill_name, "candidate_id": candidate_id,
+            "status": "error", "findings": [], "error": str(e)[:200],
+            "skill_content_preview": skill_content[:200],
+        }
+
+
 @router.post("/api/candidates/rewrite-skill")
 async def rewrite_skill(body: dict) -> dict:
     """Rewrite a flagged skill to be platform-agnostic using an LLM."""
