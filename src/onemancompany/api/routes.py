@@ -1464,10 +1464,14 @@ def _skill_content_hash(content: str) -> str:
 
 
 def _audit_cache_dir() -> Path:
-    from onemancompany.core.config import settings as _s
-    d = Path(_s.company_dir) / ".audit_cache"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    try:
+        from onemancompany.core.config import settings as _s
+        d = Path(_s.company_dir) / ".audit_cache"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    except Exception as e:
+        logger.warning("[audit-cache] Cannot create cache dir: {}", e)
+        return Path.cwd() / ".audit_cache_fallback"
 
 
 def _cache_safe_name(skill_name: str) -> str:
@@ -1494,19 +1498,22 @@ def _save_cached_audit(
     evaluator_model: str = "",
     evaluator_provider: str = "",
 ) -> None:
-    cache_file = _audit_cache_dir() / f"{_cache_safe_name(skill_name)}.json"
-    entry = {
-        "content_hash": content_hash,
-        "skill_name": skill_name,
-        "status": result.get("status", "error"),
-        "findings": result.get("findings", []),
-        "skill_content_preview": result.get("skill_content_preview", ""),
-        "audited_at": datetime.now().isoformat(),
-        "evaluator_model": evaluator_model,
-        "evaluator_provider": evaluator_provider,
-    }
-    cache_file.write_text(_json_mod.dumps(entry, ensure_ascii=False), encoding="utf-8")
-    logger.debug("[audit-cache] Saved cache for '{}' (hash={:.12}...)", skill_name, content_hash)
+    try:
+        cache_file = _audit_cache_dir() / f"{_cache_safe_name(skill_name)}.json"
+        entry = {
+            "content_hash": content_hash,
+            "skill_name": skill_name,
+            "status": result.get("status", "error"),
+            "findings": result.get("findings", []),
+            "skill_content_preview": result.get("skill_content_preview", ""),
+            "audited_at": datetime.now().isoformat(),
+            "evaluator_model": evaluator_model,
+            "evaluator_provider": evaluator_provider,
+        }
+        cache_file.write_text(_json_mod.dumps(entry, ensure_ascii=False), encoding="utf-8")
+        logger.debug("[audit-cache] Saved cache for '{}' (hash={:.12}...)", skill_name, content_hash)
+    except Exception as e:
+        logger.warning("[audit-cache] Failed to save cache for '{}': {}", skill_name, e)
 
 
 _SKILL_AUDITOR_PROMPT = """\
@@ -1819,18 +1826,21 @@ async def audit_single_skill(body: dict) -> dict:
 
     # Check cache (skip if force=True from retry button)
     if not force:
-        cached = _get_cached_audit(skill_name, content_hash)
-        if cached:
-            logger.debug("[audit-cache] Cache hit for '{}' (hash={:.12}...)", skill_name, content_hash)
-            return {
-                "skill_name": skill_name,
-                "candidate_id": candidate_id,
-                "status": cached.get("status", "error"),
-                "findings": cached.get("findings", []),
-                "skill_content_preview": cached.get("skill_content_preview", ""),
-                "cached": True,
-                "audited_at": cached.get("audited_at", ""),
-            }
+        try:
+            cached = _get_cached_audit(skill_name, content_hash)
+            if cached:
+                logger.debug("[audit-cache] Cache hit for '{}' (hash={:.12}...)", skill_name, content_hash)
+                return {
+                    "skill_name": skill_name,
+                    "candidate_id": candidate_id,
+                    "status": cached.get("status", "error"),
+                    "findings": cached.get("findings", []),
+                    "skill_content_preview": cached.get("skill_content_preview", ""),
+                    "cached": True,
+                    "audited_at": cached.get("audited_at", ""),
+                }
+        except Exception as e:
+            logger.warning("[audit-cache] Cache read failed for '{}': {}", skill_name, e)
 
     llm = await _make_auditor_llm(evaluator_model, evaluator_provider)
     if not llm:

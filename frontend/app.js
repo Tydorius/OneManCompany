@@ -4646,6 +4646,10 @@ class AppController {
               evaluator_provider: evaluatorProvider,
             }),
           });
+          if (!resp.ok) {
+            const errorText = await resp.text();
+            throw new Error(`HTTP ${resp.status}: ${errorText.substring(0, 200)}`);
+          }
           const r = await resp.json();
 
           this._renderAuditResult(el, r);
@@ -4768,6 +4772,10 @@ class AppController {
           force: true,
         }),
       });
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        throw new Error(`HTTP ${resp.status}: ${errorText.substring(0, 200)}`);
+      }
       const r = await resp.json();
       this._renderAuditResult(el, r);
 
