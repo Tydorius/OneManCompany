@@ -1626,11 +1626,11 @@ def _save_skill_content(skill_name: str, content: str) -> bool:
     return False
 
 
-async def _make_auditor_llm(model: str = "", api_provider: str = ""):
+async def _make_auditor_llm(model: str = "", api_provider: str = "", timeout: float | None = None):
     """Create an LLM instance for skill auditing without an employee profile."""
     from onemancompany.core.config import settings as _s
     from onemancompany.agents.base import _resolve_provider_key, CHAT_CLASS_OPENAI, CHAT_CLASS_ANTHROPIC
-    from onemancompany.core.config import PROVIDER_REGISTRY
+    from onemancompany.core.config import PROVIDER_REGISTRY, load_app_config
 
     _model = model or _s.default_llm_model
     _provider = api_provider or _s.default_api_provider or "openrouter"
@@ -1643,15 +1643,16 @@ async def _make_auditor_llm(model: str = "", api_provider: str = ""):
         return None
 
     base_url = _s.default_api_base_url if _provider == "custom" and _s.default_api_base_url else prov.base_url
+    _timeout = timeout or float(load_app_config().get("talent_market", {}).get("skill_audit_timeout", 300))
 
     if prov.chat_class == CHAT_CLASS_ANTHROPIC:
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(model=_model, api_key=api_key, base_url=base_url or None,
-                             temperature=0.3, max_retries=2, timeout=120.0)
+                             temperature=0.3, max_retries=2, timeout=_timeout)
     else:
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=_model, api_key=api_key, base_url=base_url,
-                          temperature=0.3, max_retries=2, timeout=120.0)
+                          temperature=0.3, max_retries=2, timeout=_timeout)
 
 
 @router.post("/api/candidates/stage-skills")
@@ -1889,8 +1890,6 @@ async def rewrite_skill(body: dict) -> dict:
     """Rewrite a flagged skill to be platform-agnostic using an LLM."""
     import json as _json
 
-    from onemancompany.core.config import settings as _s
-
     skill_name = body.get("skill_name", "")
     findings = body.get("findings", [])
     rewriter_model = body.get("rewriter_model", "")
@@ -1923,7 +1922,8 @@ async def rewrite_skill(body: dict) -> dict:
         _save_skill_content(skill_name, rewritten)
 
         # Also keep a copy for the hire flow to apply to employee dir
-        rewrites_dir = Path(_s.company_dir) / ".skill_rewrites"
+        from onemancompany.core.config import DATA_ROOT
+        rewrites_dir = DATA_ROOT / ".skill_rewrites"
         rewrites_dir.mkdir(parents=True, exist_ok=True)
         (rewrites_dir / f"{skill_name}.md").write_text(rewritten, encoding="utf-8")
 

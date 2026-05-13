@@ -4458,6 +4458,13 @@ class AppController {
         ).join('');
       }
 
+      const rwModelSel = document.getElementById('remap-audit-rewriter-model');
+      if (rwModelSel) {
+        rwModelSel.innerHTML = this._remapModels.map(m =>
+          `<option value="${this._escapeHtml(m.id)}">${this._escapeHtml(m.name || m.id)}</option>`
+        ).join('');
+      }
+
       for (const sel of remapCandidates) {
         const c = this._selectedCandidates.get(sel.candidate_id);
         const candidate = c ? c.candidate : {};
@@ -4659,6 +4666,9 @@ class AppController {
             throw new Error(`HTTP ${resp.status}: ${errorText.substring(0, 200)}`);
           }
           const r = await resp.json();
+          if (r.status === 'error' && r.error && r.error.toLowerCase().includes('timed out')) {
+            r.error = `Timed out after ${baseTimeout}s`;
+          }
 
           this._renderAuditResult(el, r);
         } catch (err) {
@@ -4719,15 +4729,8 @@ class AppController {
         </div>`;
       }).join('');
 
-      const rewriteOptions = this._remapModels.map(m =>
-        `<option value="${this._escapeHtml(m.id)}">${this._escapeHtml(m.name || m.id)}</option>`
-      ).join('');
       findingsHtml += `
         <div class="remap-audit-rewrite-row">
-          <span class="remap-field-label">Rewrite with:</span>
-          <select class="remap-audit-rewrite-select" data-skill="${this._escapeHtml(r.skill_name)}">
-            ${rewriteOptions}
-          </select>
           <button class="remap-audit-rewrite-btn" data-skill="${this._escapeHtml(r.skill_name)}"
                   data-findings='${JSON.stringify(r.findings).replace(/'/g, "&#39;")}'>
             🔄 Rewrite
@@ -4815,7 +4818,9 @@ class AppController {
       }
       const r = await resp.json();
       if (r.status === 'error') {
-        // Retryable error — reset retry count for the next manual click
+        if (r.error && r.error.toLowerCase().includes('timed out')) {
+          r.error = `Timed out after ${timeoutSec}s (retry #${retryCount})`;
+        }
       } else {
         this._skillRetryCounts[skillName] = 0;
       }
@@ -4852,8 +4857,8 @@ class AppController {
 
   async _rewriteSkill(btn) {
     const skillName = btn.dataset.skill;
-    const select = btn.closest('.remap-audit-rewrite-row').querySelector('.remap-audit-rewrite-select');
-    const model = select ? select.value : '';
+    const rwModelSel = document.getElementById('remap-audit-rewriter-model');
+    const model = rwModelSel ? rwModelSel.value : (this._remapModels.length > 0 ? this._remapModels[0].id : '');
     const provider = (() => {
       const sel = document.getElementById('remap-audit-evaluator-provider');
       return sel ? sel.value : (this._remapProviders.length > 0 ? this._remapProviders[0].id : '');
@@ -4862,13 +4867,18 @@ class AppController {
     let findings = [];
     try { findings = JSON.parse(btn.dataset.findings || '[]'); } catch (e) { findings = []; }
 
+    const timeoutSec = this._getAuditTimeout();
     btn.disabled = true;
-    btn.textContent = 'Rewriting...';
+    btn.textContent = `Rewriting (${timeoutSec}s)...`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutSec * 1000);
 
     try {
       const resp = await fetch('/api/candidates/rewrite-skill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           skill_name: skillName,
           rewriter_model: model,
@@ -4876,6 +4886,11 @@ class AppController {
           findings,
         }),
       });
+      clearTimeout(timeoutId);
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        throw new Error(`HTTP ${resp.status}: ${errorText.substring(0, 200)}`);
+      }
       const data = await resp.json();
 
       if (data.status === 'success') {
@@ -4888,12 +4903,14 @@ class AppController {
           if (statusEl) statusEl.textContent = '✅ Rewritten';
         }
       } else {
-        btn.textContent = '❌ Failed';
+        btn.textContent = `Failed: ${data.error || 'unknown'}`;
         btn.disabled = false;
         this.logEntry('SYSTEM', `Skill rewrite failed: ${data.error || 'unknown'}`, 'system');
       }
     } catch (err) {
-      btn.textContent = '❌ Error';
+      clearTimeout(timeoutId);
+      const isTimeout = err.name === 'AbortError';
+      btn.textContent = isTimeout ? `Timed out after ${timeoutSec}s` : `Error: ${err.message}`;
       btn.disabled = false;
       this.logEntry('SYSTEM', `Skill rewrite error: ${err.message}`, 'system');
     }
